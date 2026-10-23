@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive app icon foreground: white mortarboard over a bold "C" (same layout as the
+     original icon), drawn as vectors so it's sharp at every size. Everything sits well inside
+     the 66dp safe zone around (54,54), so no launcher mask clips it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- "C": thick arc opening to the right, a little below the cap. -->
+    <path
+        android:pathData="M62.4,57.9 A11,11 0 1,0 62.4,72.1"
+        android:strokeWidth="8"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="butt" />
+
+    <!-- Cap band. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M41,38.4 L41,45 Q54,50.5 67,45 L67,38.4 L54,43.4 Z" />
+
+    <!-- Board. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,28 L74,36 L54,44 L34,36 Z" />
+
+    <!-- Tassel cord + end. -->
+    <path
+        android:pathData="M37,37 L37,46.5"
+        android:strokeWidth="1.3"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M35.6,46 L38.4,46 L39.2,51.5 L34.8,51.5 Z" />
+</vector>

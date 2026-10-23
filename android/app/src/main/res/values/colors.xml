@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same as the native Theme.CollegeGuide.Launch: a white launch window with white system
+         bars and dark icons, in light and dark mode alike. -->
+    <color name="launch_splash_background">#FFFFFF</color>
+</resources>

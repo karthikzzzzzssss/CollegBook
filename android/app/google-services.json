@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "231839779626",
+    "project_id": "collegebook-ce611",
+    "storage_bucket": "collegebook-ce611.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:231839779626:android:d73a1b50e8b048f3e9ac53",
+        "android_client_info": {
+          "package_name": "com.minibrain.collegebook"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBcqvBXUhfGIWY8ik_g58kGxZbXM7Dt0l4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

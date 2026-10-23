@@ -1,0 +1,27 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Background ring (unfilled track) -->
+    <item android:id="@android:id/background">
+        <shape
+            android:innerRadiusRatio="2.8"
+            android:shape="ring"
+            android:thicknessRatio="14"
+            android:useLevel="false">
+            <solid android:color="#33FF7043" />
+        </shape>
+    </item>
+
+    <!-- Foreground ring (filled progress) -->
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape
+                android:innerRadiusRatio="2.8"
+                android:shape="ring"
+                android:thicknessRatio="14"
+                android:useLevel="true">
+                <solid android:color="#FF7043" />
+            </shape>
+        </clip>
+    </item>
+
+</layer-list>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Values the mentor incoming-call screens use, as in the native app. -->
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="red">#FF0000</color>
+    <color name="green">#008000</color>
+    <color name="icon_color">#004d40</color>
+    <color name="b455">#455a64</color>
+
+    <dimen name="sp_16">16sp</dimen>
+    <dimen name="dp_0">0dp</dimen>
+    <dimen name="dp_6">6dp</dimen>
+    <dimen name="dp_10">10dp</dimen>
+    <dimen name="dp_12">12dp</dimen>
+    <dimen name="dp_16">16dp</dimen>
+    <dimen name="dp_70">70dp</dimen>
+    <dimen name="control_bottom_margin">24dp</dimen>
+
+    <!-- The native app theme (Theme.CollegeGuide). -->
+    <style name="Base.Theme.CollegeGuide" parent="Theme.Material3.DayNight.NoActionBar" />
+    <style name="Theme.CollegeGuide" parent="Base.Theme.CollegeGuide" />
+</resources>
