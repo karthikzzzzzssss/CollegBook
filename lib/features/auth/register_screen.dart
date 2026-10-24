@@ -61,11 +61,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
       // Like the native app: ask for notifications first, then register either way.
       await requestNotificationPermission();
       final token = await fcmToken();
+      final voip = await voipToken();
       if (!mounted) return;
       final response = await widget.authRepository.register(
         phoneNumber: widget.phoneNumber,
         name: _nameController.text.trim(),
         fcmToken: token,
+        voipToken: voip,
       );
       if (!mounted) return;
       if (response.status != true || response.message != 'PROFILE_CREATED') {

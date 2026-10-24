@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:intl/intl.dart';
 
+import '../features/auth/auth_api.dart';
 import '../features/home/college_guide_api.dart';
 import 'native_bridge.dart';
 import 'native_dialog.dart';
@@ -26,6 +27,23 @@ class NotificationSync {
 
   /// Sends the token if notifications are on and the server doesn't have it.
   Future<void> syncIfEnabled() async {
+    // iOS: mentor calls come as VoIP pushes, which need no notification
+    // permission, so the PushKit token is sent whenever it is new.
+    final voip = await voipToken();
+    if (voip != null && voip.isNotEmpty) {
+      if (await _storage.read(key: _sentToken) == voip) return;
+      try {
+        await api.send(
+          'POST',
+          'auth/fcm-token/',
+          body: AuthRepository.deviceFields(voipToken: voip),
+        );
+        await _storage.write(key: _sentToken, value: voip);
+      } on CollegeGuideApiException {
+        // Retried on the next resume.
+      }
+      return;
+    }
     final enabled = await notificationsEnabled();
     final wasEnabled = await _storage.read(key: _wasEnabled) == 'true';
     await _storage.write(key: _wasEnabled, value: '$enabled');
@@ -39,7 +57,7 @@ class NotificationSync {
       await api.send(
         'POST',
         'auth/fcm-token/',
-        body: {'registration_id': token, 'device_type': 'android'},
+        body: AuthRepository.deviceFields(fcmToken: token),
       );
       await _storage.write(key: _sentToken, value: token);
     } on CollegeGuideApiException {
@@ -56,6 +74,8 @@ class NotificationSync {
     }
     await syncIfEnabled(); // records "off" so switching on later is detected
     if (!await _shouldAskToday()) return;
+    // iOS: just answered the system prompt (at login) — try again another day.
+    if (notificationPromptShownThisRun) return;
 
     final canPrompt =
         await needsNotificationPermission() &&

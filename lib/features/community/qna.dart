@@ -56,6 +56,14 @@ const askTags = [
   'Jammu and Kashmir',
 ];
 
+/// The picked tags ("All india,Telangana") as the API files them: All India
+/// is "AIC", so the question lists under All India as well as the state.
+String apiTags(String tags) => [
+  for (final tag in tags.split(','))
+    if (tag.trim().isNotEmpty)
+      tag.trim().toLowerCase() == 'all india' ? 'AIC' : tag.trim(),
+].join(',');
+
 /// Html.fromHtml(...).toString() for the plain titles/answers the API sends.
 String _plain(String? html) {
   var s = (html ?? '')
@@ -107,11 +115,16 @@ class QnaListView extends StatefulWidget {
     required this.api,
     required this.selection,
     required this.onAsk,
+    this.onAnswered,
   });
 
   final CollegeGuideApiRepository api;
   final String selection;
   final VoidCallback onAsk;
+
+  /// An answer was posted. A question tagged All India and a state is in
+  /// both lists, so the page reloads both; without it this list reloads.
+  final VoidCallback? onAnswered;
 
   @override
   State<QnaListView> createState() => QnaListViewState();
@@ -125,6 +138,7 @@ class QnaListViewState extends State<QnaListView>
   bool _lastPage = false;
   bool _loading = false;
   bool _loaded = false;
+  bool _failed = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -165,7 +179,10 @@ class QnaListViewState extends State<QnaListView>
       _items.clear();
     }
     final allIndia = widget.selection == 'All India';
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
     try {
       final json = await widget.api.send(
         'GET',
@@ -185,14 +202,19 @@ class QnaListViewState extends State<QnaListView>
       for (final r in (data['results'] as List? ?? const [])) {
         if (r is Map<String, dynamic>) {
           final item = QnaItem(r);
-          if (seen.add(item.id)) _items.add(item);
+          // The API accepts blank questions; they'd show as empty cards.
+          if (item.title.isNotEmpty && seen.add(item.id)) _items.add(item);
         }
       }
       _page++;
       _loaded = true;
     } on CollegeGuideApiException {
-      // The native list stops its spinner; an empty list shows "No discussions yet".
+      // An empty list says so instead of "No discussions yet"; pull to retry.
       _loaded = true;
+      _failed = true;
+      if (mounted && _items.isNotEmpty) {
+        showToast(context, 'Couldn\'t load more discussions');
+      }
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -204,13 +226,16 @@ class QnaListViewState extends State<QnaListView>
       backgroundColor: Colors.transparent,
       builder: (_) => AnswersSheet(api: widget.api, item: item),
     );
-    if (answered == true) refresh();
+    if (answered != true) return;
+    final onAnswered = widget.onAnswered;
+    onAnswered == null ? refresh() : onAnswered();
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
     final empty = _loaded && !_loading && _items.isEmpty;
+    final failed = empty && _failed;
     return ColoredBox(
       color: _chatBg,
       child: RefreshIndicator(
@@ -227,7 +252,20 @@ class QnaListViewState extends State<QnaListView>
                   _QuestionCard(item: item, onOpen: () => _openQuestion(item)),
               ],
             ),
-            if (empty) _EmptyState(onStart: widget.onAsk),
+            if (failed)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 32),
+                  child: Text(
+                    'Couldn\'t load discussions. Check your internet and '
+                    'pull down to try again.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: _state, fontSize: 15),
+                  ),
+                ),
+              )
+            else if (empty)
+              _EmptyState(onStart: widget.onAsk),
             if (_loading && _items.isEmpty)
               const Center(child: CircularProgressIndicator(color: _state)),
           ],
@@ -849,7 +887,7 @@ class _AnswersSheetState extends State<AnswersSheet> {
   }
 
   Future<void> _post() async {
-    final text = _input.text;
+    final text = _input.text.trim();
     if (text.isEmpty || _posting) return;
     setState(() => _posting = true);
     try {
@@ -862,8 +900,14 @@ class _AnswersSheetState extends State<AnswersSheet> {
       _input.clear();
       FocusManager.instance.primaryFocus?.unfocus();
       await _load();
-    } on CollegeGuideApiException {
-      // The send button just becomes tappable again.
+    } on CollegeGuideApiException catch (e) {
+      // The answer stays in the box to try again.
+      if (mounted) {
+        showToast(
+          context,
+          e.payload == null ? 'Network failure, please try again.' : e.message,
+        );
+      }
     }
     if (mounted) setState(() => _posting = false);
   }
@@ -1336,10 +1380,7 @@ class _AskQuestionPageState extends State<AskQuestionPage> {
       final json = await widget.api.send(
         'POST',
         'college/homepage',
-        body: {
-          'title': title,
-          'tags': tags.toLowerCase() == 'all india' ? 'AIC' : tags,
-        },
+        body: {'title': title, 'tags': apiTags(tags)},
       );
       navigator.pop();
       if (!mounted) return;
@@ -1348,9 +1389,10 @@ class _AskQuestionPageState extends State<AskQuestionPage> {
     } on CollegeGuideApiException catch (e) {
       navigator.pop();
       if (!mounted) return;
-      if (e.payload == null) {
-        showToast(context, 'Network failure, please try again.');
-      }
+      showToast(
+        context,
+        e.payload == null ? 'Network failure, please try again.' : e.message,
+      );
     }
   }
 

@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// Android-side helpers in `MainActivity.kt` that keep behaviour identical to
 /// the native app.
@@ -12,6 +13,13 @@ const _channel = MethodChannel('collegebook/platform');
 bool get _isAndroid =>
     !kIsWeb &&
     defaultTargetPlatform == TargetPlatform.android &&
+    !Platform.environment.containsKey('FLUTTER_TEST');
+
+/// iOS has no `MainActivity` channel; notification permission goes through
+/// permission_handler (UNUserNotificationCenter) there instead.
+bool get _isIOS =>
+    !kIsWeb &&
+    defaultTargetPlatform == TargetPlatform.iOS &&
     !Platform.environment.containsKey('FLUTTER_TEST');
 
 /// Shows [message] the way the native app does: an Android system Toast
@@ -44,11 +52,22 @@ Future<void> showToast(BuildContext context, String message) async {
     );
 }
 
+/// Whether the iOS system notification prompt was shown since the app
+/// started, so Home doesn't follow a fresh "Don't Allow" with its own ask.
+bool notificationPromptShownThisRun = false;
+
 /// Like the native `withNotificationPermission`: on Android 13+ asks for
 /// POST_NOTIFICATIONS while it isn't granted, and completes once the user has
 /// answered. Returns whether notifications are allowed; callers continue
 /// either way.
 Future<bool> requestNotificationPermission() async {
+  if (_isIOS) {
+    // Only unanswered prompts actually appear; once answered, iOS stays quiet.
+    if ((await Permission.notification.status).isDenied) {
+      notificationPromptShownThisRun = true;
+    }
+    return (await Permission.notification.request()).isGranted;
+  }
   if (!_isAndroid) return false;
   try {
     return await _channel.invokeMethod<bool>('requestNotificationPermission') ??
@@ -60,8 +79,12 @@ Future<bool> requestNotificationPermission() async {
   }
 }
 
-Future<T?> _invoke<T>(String method, [Map<String, Object?>? arguments]) async {
-  if (!_isAndroid) return null;
+Future<T?> _invoke<T>(
+  String method, [
+  Map<String, Object?>? arguments,
+  bool alsoIOS = false,
+]) async {
+  if (!_isAndroid && !(alsoIOS && _isIOS)) return null;
   try {
     return await _channel.invokeMethod<T>(method, arguments);
   } on MissingPluginException {
@@ -75,23 +98,51 @@ Future<T?> _invoke<T>(String method, [Map<String, Object?>? arguments]) async {
 /// notifications are on, else null (within 5s at the latest).
 Future<String?> fcmToken() => _invoke<String>('fcmToken');
 
+/// iOS: the PushKit VoIP token the mentor call pushes go to (AppDelegate),
+/// null until iOS has issued one. Elsewhere null.
+Future<String?> voipToken() async {
+  if (!_isIOS) return null;
+  return _invoke<String>('voipToken', null, true);
+}
+
 /// FcmTokenHelper.notificationsEnabled(): permission granted and the app's
 /// notifications switched on in phone settings.
-Future<bool> notificationsEnabled() async =>
-    await _invoke<bool>('notificationsEnabled') ?? false;
+Future<bool> notificationsEnabled() async {
+  if (_isIOS) {
+    final status = await Permission.notification.status;
+    return status.isGranted || status.isProvisional;
+  }
+  return await _invoke<bool>('notificationsEnabled') ?? false;
+}
 
 /// FcmTokenHelper.needsPermission(): Android 13+ and POST_NOTIFICATIONS not
-/// granted yet.
-Future<bool> needsNotificationPermission() async =>
-    await _invoke<bool>('needsNotificationPermission') ?? false;
+/// granted yet. On iOS: the system prompt hasn't been answered yet.
+Future<bool> needsNotificationPermission() async {
+  if (_isIOS) return (await Permission.notification.status).isDenied;
+  return await _invoke<bool>('needsNotificationPermission') ?? false;
+}
 
 /// Whether Android would still show the notification prompt after a denial.
-Future<bool> shouldShowNotificationRationale() async =>
-    await _invoke<bool>('shouldShowNotificationRationale') ?? false;
+/// iOS only ever shows it once, before it is answered.
+Future<bool> shouldShowNotificationRationale() async {
+  if (_isIOS) return (await Permission.notification.status).isDenied;
+  return await _invoke<bool>('shouldShowNotificationRationale') ?? false;
+}
 
 /// The app's notification settings page.
-Future<void> openNotificationSettings() =>
-    _invoke<void>('openNotificationSettings');
+Future<void> openNotificationSettings() async {
+  if (_isIOS) {
+    try {
+      await _channel.invokeMethod<void>('openNotificationSettings');
+    } on MissingPluginException {
+      await openAppSettings();
+    } on PlatformException {
+      await openAppSettings();
+    }
+    return;
+  }
+  await _invoke<void>('openNotificationSettings');
+}
 
 /// Hands the login to the native mentor incoming-call screens, which act on
 /// the user's behalf while the app is closed.
@@ -103,9 +154,60 @@ Future<void> setCallAuth({
   'access': access,
   'refresh': refresh,
   'baseUrl': baseUrl,
-});
+}, true);
 
-Future<void> clearCallAuth() => _invoke<void>('clearCallAuth');
+Future<void> clearCallAuth() => _invoke<void>('clearCallAuth', null, true);
+
+// ---- iOS CallKit (AppDelegate): mentor incoming consultation calls ----
+
+/// What CallKit tells the app about a consultation call.
+enum CallKitEvent {
+  /// A VoIP push rang ({session_id, user_name}).
+  incoming,
+
+  /// Answered on the system call screen ({session_id, user_name}).
+  answered,
+
+  /// Declined on the system call screen; AppDelegate already sent reject.
+  declined,
+
+  /// The student cancelled or the call was missed (COUNSELLOR_CALL_MISSED).
+  ended,
+
+  /// Hung up on the system call screen during the video call.
+  hungUp,
+}
+
+/// Starts delivering CallKit events; the AppDelegate replays any that came
+/// before Flutter was listening (a push that launched the app).
+/// [onVoipToken] runs when iOS issues a new PushKit token.
+void listenToCallKit(
+  void Function(CallKitEvent event, String sessionId, String? userName)
+  onEvent, {
+  required void Function() onVoipToken,
+}) {
+  if (!_isIOS) return;
+  _channel.setMethodCallHandler((call) async {
+    if (call.method == 'voipTokenUpdated') return onVoipToken();
+    if (call.method != 'callKitEvent') return;
+    final args = Map<String, Object?>.from(call.arguments as Map);
+    final event = CallKitEvent.values.asNameMap()['${args['event']}'];
+    final sessionId = '${args['session_id'] ?? ''}';
+    if (event == null || sessionId.isEmpty) return;
+    onEvent(event, sessionId, args['user_name'] as String?);
+  });
+  _invoke<void>('callKitListening', null, true);
+}
+
+/// Tells CallKit the app answered or declined [sessionId] itself, so the
+/// system call screen stops ringing (AppDelegate sends no API call for it).
+Future<void> callKitAnswered(String sessionId) =>
+    _invoke<void>('callKitAnswered', {'session_id': sessionId}, true);
+
+/// Ends the CallKit call for [sessionId]: declined in the app, or the video
+/// call is over.
+Future<void> callKitEnd(String sessionId) =>
+    _invoke<void>('callKitEnd', {'session_id': sessionId}, true);
 
 /// Like the native `makeCallWithPermission()`: asks for CALL_PHONE if needed,
 /// then places the call directly (Android). Elsewhere nothing happens.

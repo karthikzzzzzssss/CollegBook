@@ -1,11 +1,13 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 /// colorAccent under the native Theme.Material3 app theme.
 const _accent = Color(0xFF6750A4);
 
-/// The native `android.app.AlertDialog`: a white 2dp-cornered card with a
-/// 20sp title, 16sp message and borderless all-caps accent buttons, in the
-/// system font. Resolves true for [positive], false for [negative] and null
+/// The platform's own alert: on Android the native `android.app.AlertDialog`
+/// (a white 2dp-cornered card with a 20sp title, 16sp message and borderless
+/// all-caps accent buttons, in the system font); on iOS a `UIAlertController`
+/// look-alike. Resolves true for [positive], false for [negative] and null
 /// when dismissed.
 Future<bool?> showNativeAlert(
   BuildContext context, {
@@ -15,6 +17,31 @@ Future<bool?> showNativeAlert(
   String? negative,
   bool cancelable = true,
 }) {
+  if (Theme.of(context).platform == TargetPlatform.iOS) {
+    // iOS alerts don't close on a tap outside; the cancel button does that.
+    return showCupertinoDialog<bool>(
+      context: context,
+      builder: (dialogContext) => PopScope(
+        canPop: cancelable,
+        child: CupertinoAlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            if (negative != null)
+              CupertinoDialogAction(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(negative),
+              ),
+            CupertinoDialogAction(
+              isDefaultAction: true,
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(positive),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   return showDialog<bool>(
     context: context,
     barrierDismissible: cancelable,

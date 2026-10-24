@@ -26,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>CollegeBook uses the camera for video calls with mentors and to share photos in the community chat.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>CollegeBook uses the microphone for video calls with mentors.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>CollegeBook lets you share photos in the community chat.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -49,6 +55,11 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>voip</string>
+		<string>audio</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -66,11 +77,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>CollegeBook lets you share photos in the community chat.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>CollegeBook uses the camera for video calls with mentors and to share photos in the community chat.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>CollegeBook uses the microphone for video calls with mentors.</string>
 </dict>
 </plist>

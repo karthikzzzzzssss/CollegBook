@@ -473,8 +473,8 @@ class _CollegesPageState extends State<_CollegesPage> {
 
   void _maybeLoadMore() {
     if (!widget.isSubscribed || _loading || _page >= _totalPages) return;
-    // Next page a couple of cards before the end.
-    if (_scroll.position.extentAfter < 600) _load(_currentParams, _page + 1);
+    // Next page about four cards before the end, so a fling never waits.
+    if (_scroll.position.extentAfter < 2000) _load(_currentParams, _page + 1);
   }
 
   Future<void> _load(Map<String, String> params, int page) async {
@@ -1158,94 +1158,88 @@ class _CutoffTable extends StatelessWidget {
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: onRow,
-                    child: IntrinsicWidth(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                    // The divider is a bottom border as wide as the row.
+                    child: Container(
+                      padding: const EdgeInsets.only(top: 8, bottom: 10),
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: Color(0xFFEFEEEE)),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const SizedBox(width: 4),
-                                SizedBox(
-                                  width: 100,
-                                  child: Text(
-                                    '${row['course_name'] ?? ''}',
-                                    style: const TextStyle(
-                                      color: Colors.black,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                                for (final key in const [
-                                  'round_1',
-                                  'round_2',
-                                  'round_3',
-                                  'round_4',
-                                  'round_5',
-                                ])
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 4),
-                                    child: SizedBox(
-                                      width: 60,
-                                      child: Text(
-                                        _round(row[key]),
-                                        textAlign: TextAlign.center,
-                                        style: _cell,
-                                      ),
-                                    ),
-                                  ),
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 4),
-                                  child: SizedBox(
-                                    width: 65,
-                                    child: Text(
-                                      '${row['fee'] ?? ''}',
-                                      textAlign: TextAlign.center,
-                                      style: _cell,
-                                    ),
-                                  ),
-                                ),
-                                if (examRank != 0)
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 20),
-                                    child: SvgPicture.asset(
-                                      row['is_match'] == true
-                                          ? 'assets/icons/ic_baseline_rank_match.svg'
-                                          : 'assets/icons/ic_baseline_rank_unamtch.svg',
-                                      width: 18,
-                                      height: 18,
-                                      colorFilter: const ColorFilter.mode(
-                                        Color(0xFF404040),
-                                        BlendMode.srcIn,
-                                      ),
-                                    ),
-                                  )
-                                else
-                                  const Padding(
-                                    padding: EdgeInsets.only(left: 8),
-                                    child: SizedBox(
-                                      width: 60,
-                                      child: Text(
-                                        'Enter Rank',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: Color(0xFF0178D4),
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                              ],
+                          const SizedBox(width: 4),
+                          SizedBox(
+                            width: 100,
+                            child: Text(
+                              '${row['course_name'] ?? ''}',
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontSize: 12,
+                              ),
                             ),
                           ),
-                          Container(
-                            height: 1,
-                            margin: const EdgeInsets.only(top: 2),
-                            color: const Color(0xFFEFEEEE),
+                          for (final key in const [
+                            'round_1',
+                            'round_2',
+                            'round_3',
+                            'round_4',
+                            'round_5',
+                          ])
+                            Padding(
+                              padding: const EdgeInsets.only(left: 4),
+                              child: SizedBox(
+                                width: 60,
+                                child: Text(
+                                  _round(row[key]),
+                                  textAlign: TextAlign.center,
+                                  style: _cell,
+                                ),
+                              ),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: SizedBox(
+                              width: 65,
+                              child: Text(
+                                '${row['fee'] ?? ''}',
+                                textAlign: TextAlign.center,
+                                style: _cell,
+                              ),
+                            ),
                           ),
+                          if (examRank != 0)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 20),
+                              child: SvgPicture.asset(
+                                row['is_match'] == true
+                                    ? 'assets/icons/ic_baseline_rank_match.svg'
+                                    : 'assets/icons/ic_baseline_rank_unamtch.svg',
+                                width: 18,
+                                height: 18,
+                                colorFilter: const ColorFilter.mode(
+                                  Color(0xFF404040),
+                                  BlendMode.srcIn,
+                                ),
+                              ),
+                            )
+                          else
+                            const Padding(
+                              padding: EdgeInsets.only(left: 8),
+                              child: SizedBox(
+                                width: 60,
+                                child: Text(
+                                  'Enter Rank',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Color(0xFF0178D4),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -1523,6 +1517,11 @@ class _AuthWebViewState extends State<AuthWebView> {
   late final WebViewController _controller;
   bool _loading = true;
 
+  /// The URL we last loaded with headers ourselves. iOS reports our own
+  /// loadRequest() to onNavigationRequest too (Android doesn't), so it must
+  /// be let through or it would be re-issued forever.
+  Uri? _authLoad;
+
   @override
   void initState() {
     super.initState();
@@ -1532,6 +1531,7 @@ class _AuthWebViewState extends State<AuthWebView> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) {
+            _authLoad = null;
             if (mounted) setState(() => _loading = true);
           },
           onPageFinished: (_) {
@@ -1548,24 +1548,21 @@ class _AuthWebViewState extends State<AuthWebView> {
             if (uri != null &&
                 uri.host == widget.api.apiHost &&
                 request.isMainFrame) {
-              await _controller.loadRequest(
-                uri,
-                headers: await widget.api.authHeaders(),
-              );
+              if (uri == _authLoad) return NavigationDecision.navigate;
+              await _loadWithAuth(uri);
               return NavigationDecision.prevent;
             }
             return NavigationDecision.navigate;
           },
         ),
       );
-    _load();
+    _loadWithAuth(widget.url);
   }
 
-  Future<void> _load() async {
-    await _controller.loadRequest(
-      widget.url,
-      headers: await widget.api.authHeaders(),
-    );
+  Future<void> _loadWithAuth(Uri uri) async {
+    final headers = await widget.api.authHeaders();
+    _authLoad = uri;
+    await _controller.loadRequest(uri, headers: headers);
   }
 
   @override

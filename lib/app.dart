@@ -6,6 +6,7 @@ import 'features/auth/login_screen.dart';
 import 'features/auth/session_store.dart';
 import 'features/home/college_guide_api.dart';
 import 'features/home/home_shell.dart';
+import 'features/mentor/incoming_consultation.dart';
 import 'features/splash/splash_screen.dart';
 import 'theme/app_theme.dart';
 
@@ -32,6 +33,7 @@ class CollegeGuideApp extends StatelessWidget {
     );
 
     return MaterialApp(
+      navigatorKey: appNavigatorKey,
       title: 'CollegeGuide',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,

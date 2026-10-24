@@ -115,11 +115,13 @@ class _LoginScreenState extends State<LoginScreen> {
       // Like the native app: ask for notifications first, then verify either way.
       await requestNotificationPermission();
       final token = await fcmToken();
+      final voip = await voipToken();
       if (!mounted) return;
       final response = await _authRepository.verifyOtp(
         phoneNumber: _phoneController.text.trim(),
         otp: otp,
         fcmToken: token,
+        voipToken: voip,
       );
       if (!mounted) return;
       if (response.status == false) {

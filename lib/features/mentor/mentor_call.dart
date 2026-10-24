@@ -123,6 +123,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
   bool _finished = false;
   bool _swapped = false;
   bool _waitingShown = false;
+  DialogRoute<void>? _waitingRoute;
   int? _remoteUid;
   String? _remaining;
 
@@ -240,9 +241,10 @@ class _VideoCallPageState extends State<VideoCallPage> {
   // ---- Waiting dialog: shown until the mentor joins ----
 
   void _showWaitingDialog() {
-    if (_waitingShown || _finished) return;
+    // Not once the mentor is in: the socket and Agora can race.
+    if (_waitingShown || _finished || _connected || _remoteConnected) return;
     _waitingShown = true;
-    showDialog<void>(
+    final route = DialogRoute<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => PopScope(
@@ -252,13 +254,22 @@ class _VideoCallPageState extends State<VideoCallPage> {
         },
         child: _WaitingDialog(onCancel: _cancelFromWaiting),
       ),
-    ).whenComplete(() => _waitingShown = false);
+    );
+    _waitingRoute = route;
+    Navigator.of(context).push(route).whenComplete(() {
+      _waitingShown = false;
+      if (_waitingRoute == route) _waitingRoute = null;
+    });
   }
 
+  /// Closes the waiting dialog itself — never whatever is on top (such as
+  /// the End Call? dialog the user has open).
   void _dismissWaitingDialog() {
-    if (!_waitingShown || !mounted) return;
+    final route = _waitingRoute;
     _waitingShown = false;
-    Navigator.of(context).pop();
+    _waitingRoute = null;
+    if (route == null || !mounted || !route.isActive) return;
+    Navigator.of(context).removeRoute(route);
   }
 
   Future<void> _cancelFromWaiting() async {
@@ -389,8 +400,10 @@ class _VideoCallPageState extends State<VideoCallPage> {
     if (!mounted) return;
     setState(() => _localConnected = true);
     _checkBothConnected();
-    _showWaitingDialog();
-    _startWaitingTimer();
+    if (!_connected) {
+      _showWaitingDialog();
+      _startWaitingTimer();
+    }
   }
 
   void _switchCamera() => _engine?.switchCamera();
@@ -788,6 +801,390 @@ class _WaitingDialogState extends State<_WaitingDialog>
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The mentor's side of an accepted consultation (CounsellorVideoCallActivity,
+/// activity_counsellor_video_call.xml): the same screen as [VideoCallPage],
+/// on the counsellor socket. It ends on the mentor's request (end API), when
+/// the student leaves, or when the call socket says the call is over.
+class CounsellorVideoCallPage extends StatefulWidget {
+  const CounsellorVideoCallPage({
+    super.key,
+    required this.api,
+    required this.sessionId,
+    required this.uid,
+    required this.channelName,
+    required this.agoraToken,
+  });
+
+  /// The `data` of college/call/{id}/accept/.
+  factory CounsellorVideoCallPage.fromAccept(
+    CollegeGuideApiRepository api,
+    String sessionId,
+    Map<dynamic, dynamic> data,
+  ) => CounsellorVideoCallPage(
+    api: api,
+    sessionId: '${data['session_id'] ?? sessionId}',
+    uid: (data['uid'] as num?)?.toInt() ?? 0,
+    channelName: '${data['channel_name'] ?? ''}',
+    agoraToken: '${data['agora_token'] ?? ''}',
+  );
+
+  final CollegeGuideApiRepository api;
+  final String sessionId;
+  final int uid;
+  final String channelName;
+  final String agoraToken;
+
+  /// The call on screen, so CallKit's "ended" can close it.
+  static final active = <String, CounsellorVideoCallPageState>{};
+
+  @override
+  State<CounsellorVideoCallPage> createState() =>
+      CounsellorVideoCallPageState();
+}
+
+class CounsellorVideoCallPageState extends State<CounsellorVideoCallPage> {
+  RtcEngine? _engine;
+  WebSocketChannel? _socket;
+  StreamSubscription<dynamic>? _socketSubscription;
+
+  bool _muted = false;
+  bool _localConnected = false;
+  bool _swapped = false;
+  bool _sessionEnded = false;
+  bool _forceClosing = false;
+  bool _finished = false;
+  int? _remoteUid;
+
+  @override
+  void initState() {
+    super.initState();
+    CounsellorVideoCallPage.active[widget.sessionId] = this;
+    _joinChannel();
+    _connectCallSocket();
+  }
+
+  @override
+  void dispose() {
+    if (CounsellorVideoCallPage.active[widget.sessionId] == this) {
+      CounsellorVideoCallPage.active.remove(widget.sessionId);
+    }
+    _releaseCall();
+    super.dispose();
+  }
+
+  void _releaseCall() {
+    _socketSubscription?.cancel();
+    _socketSubscription = null;
+    _socket?.sink.close();
+    _socket = null;
+    final engine = _engine;
+    _engine = null;
+    if (engine != null) engine.leaveChannel().whenComplete(engine.release);
+  }
+
+  // ---- Agora ----
+
+  Future<void> _joinChannel() async {
+    final statuses = await [Permission.microphone, Permission.camera].request();
+    if (!mounted) return;
+    if (statuses.values.any((s) => !s.isGranted)) {
+      showToast(
+        context,
+        'Camera & microphone permissions are needed for the call.',
+      );
+      _endSession();
+      return;
+    }
+    final engine = createAgoraRtcEngine();
+    try {
+      await engine.initialize(
+        const RtcEngineContext(
+          appId: _agoraAppId,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
+        ),
+      );
+    } on Object {
+      if (!mounted) return;
+      showToast(context, "Couldn't start the video call");
+      _leaveAndFinish();
+      return;
+    }
+    if (!mounted) {
+      await engine.release();
+      return;
+    }
+    _engine = engine;
+    engine.registerEventHandler(
+      RtcEngineEventHandler(
+        onUserJoined: (connection, remoteUid, elapsed) {
+          if (mounted) setState(() => _remoteUid = remoteUid);
+        },
+        onUserOffline: (connection, remoteUid, reason) {
+          if (!mounted) return;
+          setState(() => _remoteUid = null);
+          _forceClose('Session ended by the other participant.');
+        },
+      ),
+    );
+    await engine.enableVideo();
+    await engine.enableAudio();
+    await engine.setDefaultAudioRouteToSpeakerphone(true);
+    await engine.muteLocalAudioStream(false);
+    await engine.startPreview();
+    await engine.joinChannel(
+      token: widget.agoraToken,
+      channelId: widget.channelName,
+      uid: widget.uid,
+      options: const ChannelMediaOptions(
+        channelProfile: ChannelProfileType.channelProfileCommunication,
+        clientRoleType: ClientRoleType.clientRoleBroadcaster,
+      ),
+    );
+    if (mounted) setState(() => _localConnected = true);
+  }
+
+  void _switchCamera() => _engine?.switchCamera();
+
+  void _toggleMute() {
+    setState(() => _muted = !_muted);
+    _engine?.muteLocalAudioStream(_muted);
+  }
+
+  /// Tapping either box swaps the two videos once the student is in.
+  void _swap() {
+    if (_remoteUid == null || !_localConnected) return;
+    setState(() => _swapped = !_swapped);
+  }
+
+  // ---- Call socket (CounsellorCallSocketManager) ----
+
+  Future<void> _connectCallSocket() async {
+    if (widget.sessionId.isEmpty) return;
+    final token = await widget.api.accessToken() ?? '';
+    if (!mounted) return;
+    final uri = Uri.parse(
+      'wss://${widget.api.apiHost}/ws/call/${widget.sessionId}/counsellor/',
+    ).replace(queryParameters: {'token': token});
+    try {
+      final socket = WebSocketChannel.connect(uri);
+      _socket = socket;
+      _socketSubscription = socket.stream.listen(
+        (message) => _handleMessage('$message'),
+        onError: (Object e) =>
+            debugPrint('CounsellorCallSocket: failure ${e.runtimeType}'),
+      );
+    } on Object catch (e) {
+      debugPrint('CounsellorCallSocket: failure ${e.runtimeType}');
+    }
+  }
+
+  void _handleMessage(String text) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on FormatException {
+      return;
+    }
+    if (decoded is! Map || !mounted) return;
+    switch (decoded['type']) {
+      case 'BALANCE_UPDATE':
+        final balance = double.tryParse('${decoded['balance'] ?? '0'}');
+        if (balance != null && balance <= 0) {
+          _forceClose("Call ended: caller's balance exhausted.");
+        }
+      case 'CALL_CANCELLED' ||
+          'CALL_REJECTED' ||
+          'CALL_MISSED' ||
+          'CALL_BALANCE_EXHAUSTED' ||
+          'CALL_ENDED':
+        final body = decoded['body'];
+        _forceClose(body is String ? body : 'Session ended.');
+    }
+  }
+
+  // ---- Ending ----
+
+  Future<void> _showExitCallDialog() async {
+    if (_sessionEnded || _forceClosing) return;
+    final end = await showNativeAlert(
+      context,
+      title: 'End Call?',
+      message: 'Are you sure you want to end this call?',
+      negative: 'Stay',
+      positive: 'End',
+    );
+    if (end == true) _endSession();
+  }
+
+  Future<void> _endSession() async {
+    if (_sessionEnded) return;
+    _sessionEnded = true;
+    if (widget.sessionId.isNotEmpty) {
+      try {
+        await widget.api.send(
+          'POST',
+          'college/counsellor/call/${widget.sessionId}/end/',
+          body: const {},
+        );
+      } on CollegeGuideApiException {
+        // Closes either way, as natively.
+      }
+    }
+    _leaveAndFinish();
+  }
+
+  /// Hung up on the system call screen: end it as the End button does.
+  void hangUp() => _endSession();
+
+  /// The call is over from the other side (or CallKit): say so, then close.
+  Future<void> forceClose(String message) => _forceClose(message);
+
+  Future<void> _forceClose(String message) async {
+    if (_forceClosing || _finished || !mounted) return;
+    _forceClosing = true;
+    _sessionEnded = true; // the back button no longer calls the end API
+    await showNativeAlert(
+      context,
+      title: 'Session Ended',
+      message: message.isNotEmpty ? message : 'Session ended by a participant.',
+      positive: 'OK',
+      cancelable: false,
+    );
+    _leaveAndFinish();
+  }
+
+  void _leaveAndFinish() {
+    if (_finished || !mounted) return;
+    _finished = true;
+    _releaseCall();
+    callKitEnd(widget.sessionId);
+    Navigator.of(context).pop();
+  }
+
+  Widget? _localView() {
+    final engine = _engine;
+    if (engine == null || !_localConnected) return null;
+    return AgoraVideoView(
+      controller: VideoViewController(
+        rtcEngine: engine,
+        canvas: const VideoCanvas(
+          uid: 0,
+          renderMode: RenderModeType.renderModeHidden,
+        ),
+      ),
+    );
+  }
+
+  Widget? _remoteView() {
+    final engine = _engine;
+    final remoteUid = _remoteUid;
+    if (engine == null || remoteUid == null) return null;
+    return AgoraVideoView(
+      controller: VideoViewController.remote(
+        rtcEngine: engine,
+        canvas: VideoCanvas(
+          uid: remoteUid,
+          renderMode: RenderModeType.renderModeHidden,
+        ),
+        connection: RtcConnection(channelId: widget.channelName),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final top = _swapped ? _localView() : _remoteView();
+    final bottom = _swapped ? _remoteView() : _localView();
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _showExitCallDialog();
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: const SystemUiOverlayStyle(
+          statusBarColor: Colors.black,
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+          systemNavigationBarColor: Colors.black,
+          systemNavigationBarIconBrightness: Brightness.light,
+        ),
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: SafeArea(
+            bottom: false,
+            child: Column(
+              children: [
+                _CallHeader(onBack: _showExitCallDialog),
+                Expanded(
+                  child: ColoredBox(
+                    color: Colors.white,
+                    child: SafeArea(
+                      top: false,
+                      child: Column(
+                        children: [
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: Column(
+                                children: [
+                                  Expanded(
+                                    child: _VideoBox(
+                                      key: const Key('counsellorRemoteBox'),
+                                      onTap: _swap,
+                                      child: top,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Expanded(
+                                    child: _VideoBox(
+                                      key: const Key('counsellorLocalBox'),
+                                      onTap: _swap,
+                                      child: bottom,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 24),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                _PressedImageButton(
+                                  label: 'Switch camera',
+                                  name: 'btn_switch_camera',
+                                  onTap: _switchCamera,
+                                ),
+                                const SizedBox(width: 16),
+                                _PressedImageButton(
+                                  label: _muted ? 'Unmute' : 'Mute',
+                                  name: _muted ? 'btn_mute' : 'btn_unmute',
+                                  onTap: _toggleMute,
+                                ),
+                                const SizedBox(width: 16),
+                                _PressedImageButton(
+                                  label: 'End call',
+                                  name: 'btn_endcall',
+                                  onTap: _showExitCallDialog,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

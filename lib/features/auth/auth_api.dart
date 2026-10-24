@@ -94,11 +94,12 @@ class AuthRepository {
     required String phoneNumber,
     required String otp,
     String? fcmToken,
+    String? voipToken,
   }) {
     return _post('auth/login/', {
       'phone_number': phoneNumber,
       'otp': otp,
-      ..._deviceFields(fcmToken),
+      ...deviceFields(fcmToken: fcmToken, voipToken: voipToken),
     });
   }
 
@@ -106,20 +107,31 @@ class AuthRepository {
     required String phoneNumber,
     required String name,
     String? fcmToken,
+    String? voipToken,
   }) {
     return _post('auth/register/', {
       'phone_number': phoneNumber,
       'name': name,
-      ..._deviceFields(fcmToken),
+      ...deviceFields(fcmToken: fcmToken, voipToken: voipToken),
     });
   }
 
-  /// FcmTokenHelper.addDeviceFields(): "registration_id" + "device_type",
-  /// only when there is a token (notifications on).
-  static Map<String, String> _deviceFields(String? fcmToken) =>
-      fcmToken == null || fcmToken.isEmpty
-      ? const {}
-      : {'registration_id': fcmToken, 'device_type': 'android'};
+  /// The device's push fields, also sent alone to auth/fcm-token/:
+  ///  - iOS: "device_type" + "voip_token" (PushKit; no registration_id),
+  ///  - Android: FcmTokenHelper.addDeviceFields(), "registration_id" +
+  ///    "device_type", only when there is a token (notifications on).
+  static Map<String, String> deviceFields({
+    String? fcmToken,
+    String? voipToken,
+  }) {
+    if (voipToken != null && voipToken.isNotEmpty) {
+      return {'device_type': 'ios', 'voip_token': voipToken};
+    }
+    if (fcmToken != null && fcmToken.isNotEmpty) {
+      return {'registration_id': fcmToken, 'device_type': 'android'};
+    }
+    return const {};
+  }
 
   /// Best effort, like the native logout(): the caller clears the session
   /// whatever this answers.

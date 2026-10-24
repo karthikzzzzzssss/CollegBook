@@ -14,11 +14,11 @@ Future<void> main() async {
   runApp(const CollegeGuideApp());
 }
 
-/// The native app's Firebase project (android/app/google-services.json):
-/// Crashlytics for crashes, Messaging for mentor call pushes. iOS has no
-/// GoogleService-Info.plist yet, so it runs without Firebase.
+/// Crashlytics for crashes (and, on Android, Messaging for mentor call
+/// pushes). Android uses the native app's project (google-services.json);
+/// iOS uses ios/Runner/GoogleService-Info.plist (collegeguide-ios).
 Future<void> _initFirebase() async {
-  if (kIsWeb || !Platform.isAndroid) return;
+  if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
   try {
     await Firebase.initializeApp();
   } on Object catch (e) {

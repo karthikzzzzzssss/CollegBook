@@ -164,6 +164,10 @@ class _CommunityPageState extends State<CommunityPage> {
         setState(() => _allIndiaSelected = false);
       }
     }
+    _refreshQna();
+  }
+
+  void _refreshQna() {
     _allIndiaQna.currentState?.refresh();
     _stateQna.currentState?.refresh();
   }
@@ -216,6 +220,7 @@ class _CommunityPageState extends State<CommunityPage> {
                                   api: widget.api,
                                   selection: 'All India',
                                   onAsk: _ask,
+                                  onAnswered: _refreshQna,
                                 ),
                               ),
                               Offstage(
@@ -225,6 +230,7 @@ class _CommunityPageState extends State<CommunityPage> {
                                   api: widget.api,
                                   selection: stateName,
                                   onAsk: _ask,
+                                  onAnswered: _refreshQna,
                                 ),
                               ),
                               Positioned(

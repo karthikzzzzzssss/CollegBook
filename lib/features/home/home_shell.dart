@@ -11,6 +11,7 @@ import '../../theme/app_theme.dart';
 import '../cutoff/cutoff_page.dart';
 import 'college_guide_api.dart';
 import '../community/community_page.dart';
+import '../mentor/incoming_consultation.dart';
 import '../mentor/mentor_page.dart';
 import '../premium/premium_page.dart';
 import '../support/as_mentor_page.dart';
@@ -61,6 +62,11 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         widget.apiRepository ??
         CollegeGuideApiRepository(sessionStore: _sessionStore);
     _loadMembership();
+    // iOS mentor calls (CallKit); a fresh PushKit token goes to the server.
+    CounsellorCalls.start(
+      _apiRepository,
+      onVoipToken: _notificationSync.syncIfEnabled,
+    );
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkNotifications());
   }
