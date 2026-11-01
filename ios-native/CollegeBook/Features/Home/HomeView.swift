@@ -267,9 +267,10 @@ struct HomeView: View {
     VStack(alignment: .leading, spacing: 0) {
     helpfulTools(showGuidance: showGuidance)
     newsUpdates
-    webinars
+    // A section with nothing in it isn't shown, not even its heading.
+    if !data.reels.isEmpty { webinars }
     ccmsSection(match: "state", style: .state)
-    liveEvents
+    if !data.events.isEmpty { liveEvents }
     Color.clear.frame(height: 0).id("completeNeet")
     CompleteNeetView(recommended: data.recommended)
     ccmsSection(match: "cours", style: .course)
