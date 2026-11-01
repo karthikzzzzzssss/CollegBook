@@ -20,6 +20,8 @@ struct HomeView: View {
   let openCutoffTab: (Int) -> Void
   let openMenu: () -> Void
   let openPackages: () -> Void
+  /// The exam was switched: what other tabs loaded belongs to the old one.
+  let onExamChanged: () -> Void
 
   static let contactNumber = "8500001406"
 
@@ -129,7 +131,10 @@ struct HomeView: View {
         try await app.api.request("PATCH", "auth/exam-type/", body: ["exam_type": exam.code])
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         app.show("Switched to \(exam.name)")
+        onExamChanged()
         await refresh()
+        // From here the server's answer decides, as on a fresh launch.
+        if data.examTypes.contains(where: \.isSelected) { selectedExam = nil }
       } catch {
         // The server kept the old exam: show it again, not the one tapped.
         selectedExam = previous

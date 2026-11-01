@@ -49,6 +49,8 @@ struct HomeShellView: View {
   @State private var confirmLogout = false
   @State private var loggingOut = false
   @State private var confirmDelete = false
+  /// Bumped by an exam switch: every tab but Home starts over.
+  @State private var examGeneration = 0
   @State private var deletingAccount = false
   /// college/membership/: every tab treats the user as free until it says otherwise.
   @State private var isSubscribed = false
@@ -61,7 +63,7 @@ struct HomeShellView: View {
           // selected one is drawn on top so the status bar reads its header.
           ForEach(HomeTab.allCases.filter { visited.contains($0) }) { tab in
             TabHost(hidden: tab != selected) {
-              page(tab).environmentObject(app).environment(\.scenePhase, scenePhase)
+              page(tab).id(tab == .home ? 0 : examGeneration).environmentObject(app).environment(\.scenePhase, scenePhase)
             }
             // Up to the screen's top edge, so each tab's green header colour
             // fills the status bar (its content still lays out below it).
@@ -143,7 +145,13 @@ struct HomeShellView: View {
         isSubscribed: isSubscribed,
         openCutoffTab: { collegeTab = $0; selected = .cutoff },
         openMenu: { menuOpen = true },
-        openPackages: { showPackages = true })
+        openPackages: { showPackages = true },
+        onExamChanged: {
+          examGeneration += 1
+          // Reloaded when next opened, not all at once in the background.
+          visited = [.home, .videos]
+          Task { await loadMembership() }
+        })
     case .mentor:
       MentorView(isActive: selected == .mentor)
     case .community:
