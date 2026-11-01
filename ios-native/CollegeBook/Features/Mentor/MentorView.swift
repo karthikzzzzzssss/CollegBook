@@ -28,9 +28,16 @@ final class Mentor: Identifiable, ObservableObject {
     instituteName = json["institute_name"] as? String ?? ""
     degree = (json["degree"] as? String ?? "").trimmingCharacters(in: .whitespaces)
     var available = json["is_available"] as? Bool
+    // Where the server sends it, presence is the live state; is_available is
+    // only the mentor's own switch.
+    if available != false, let presence = json["presence"] as? String { available = presence == "online" }
     #if DEBUG
       // `-mentorsOffline YES`: every mentor offline, to check that card.
       if UserDefaults.standard.bool(forKey: "mentorsOffline") { available = false }
+      // `-mentorsOfflineAfter <seconds>`: all go offline that long after launch,
+      // to check that a list on screen picks it up.
+      let after = UserDefaults.standard.double(forKey: "mentorsOfflineAfter")
+      if after > 0, Date().timeIntervalSince(launchedAt) > after { available = false }
     #endif
     self.available = available
     liked = json.bool("like_status") == true
@@ -41,13 +48,24 @@ final class Mentor: Identifiable, ObservableObject {
   }
 }
 
+#if DEBUG
+  private let launchedAt = Date()
+#endif
+
+/// How often a mentor list on screen re-reads who is online.
+private let availabilitySeconds = 15.0
+
 enum MentorRoute: Hashable {
   case favourites, wallet
 }
 
 /// The Mentor tab — CollegePGTalkFragment (fragment_college_p_g_talk.xml).
 struct MentorView: View {
+  /// The Mentor tab is the one showing.
+  let isActive: Bool
+
   @EnvironmentObject private var app: AppState
+  @Environment(\.scenePhase) private var scenePhase
   @State private var mentors: [Mentor] = []
   @StateObject private var filters = MentorFilters()
   @State private var page = 1
@@ -120,6 +138,15 @@ struct MentorView: View {
       guard !loaded else { return }
       await load(fresh: true)
     }
+    // The tab stays alive, so without this a mentor who goes offline would keep
+    // showing Online. Runs at once on opening the tab or returning to the app.
+    .task(id: isActive && scenePhase == .active) {
+      guard isActive, scenePhase == .active else { return }
+      while !Task.isCancelled {
+        await refreshAvailability()
+        try? await Task.sleep(seconds: availabilitySeconds)
+      }
+    }
     .onChangeCompat(of: route == nil) { _, atRoot in
       // Back from Favourites with changes: reload.
       if atRoot, favouritesChanged {
@@ -130,6 +157,23 @@ struct MentorView: View {
   }
 
   private var isEmpty: Bool { loaded && !loading && mentors.isEmpty }
+
+  /// Re-reads what's listed, in place: no spinner, no jump, and a failure just
+  /// waits for the next round.
+  private func refreshAvailability() async {
+    guard loaded, !loading else { return }
+    let current = request
+    guard
+      let json = try? await app.api.request(
+        "POST", "college/counsellor-list/",
+        body: [
+          "states": filters.applied[0], "institute_names": filters.applied[1], "specialities": filters.applied[2],
+          "degrees": filters.applied[3], "page": 1, "limit": Self.pageLimit * page,
+        ]),
+      let data = json.object("data"), current == request, !loading
+    else { return }
+    mentors = data.objects("results").map(Mentor.init)
+  }
 
   private func load(fresh: Bool) async {
     if fresh { page = 1 }
@@ -433,7 +477,24 @@ struct FavouriteMentorsView: View {
     .background(stateGreen.ignoresSafeArea(edges: .top))
     .hiddenNavigationBar()
     .coversTabBar()
-    .task { await load(fresh: true) }
+    .task {
+      await load(fresh: true)
+      while !Task.isCancelled {
+        try? await Task.sleep(seconds: availabilitySeconds)
+        if !Task.isCancelled { await refreshAvailability() }
+      }
+    }
+  }
+
+  /// As on the Mentor tab: the list re-read in place.
+  private func refreshAvailability() async {
+    guard !loading else { return }
+    let current = request
+    guard
+      let data = try? await app.api.object("college/fevorite-counsellor/", query: ["page": "1", "limit": "\(10 * page)"]),
+      current == request, !loading
+    else { return }
+    mentors = data.objects("results").map(Mentor.init)
   }
 
   private func load(fresh: Bool) async {

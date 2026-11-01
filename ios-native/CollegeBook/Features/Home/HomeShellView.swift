@@ -145,7 +145,7 @@ struct HomeShellView: View {
         openMenu: { menuOpen = true },
         openPackages: { showPackages = true })
     case .mentor:
-      MentorView()
+      MentorView(isActive: selected == .mentor)
     case .community:
       CommunityView()
     case .videos:
