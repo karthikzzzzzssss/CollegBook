@@ -1,0 +1,15 @@
+{
+  "images": [
+    {
+      "filename": "ic_baseline_college_package_unselect.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "preserves-vector-representation": true
+  }
+}

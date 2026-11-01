@@ -1,0 +1,15 @@
+{
+  "images": [
+    {
+      "filename": "ic_baseline_thumb_up_24.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "preserves-vector-representation": true
+  }
+}
