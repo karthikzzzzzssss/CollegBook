@@ -19,9 +19,8 @@ let shareAppText = """
 
   NEET PG college cutoffs, rank-wise college matching, fee details, counselling choice lists and 1-to-1 video calls with PGs & faculty – all in one app.
 
-  Download it free:
-  iPhone: https://apps.apple.com/app/id6797748915
-  Android: https://play.google.com/store/apps/details?id=com.minibrain.collegebook
+  Download it free on the App Store:
+  https://apps.apple.com/app/id6797748915
   """
 
 /// layout_cb_header: green bar with back and title.

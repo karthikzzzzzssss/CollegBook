@@ -11,6 +11,7 @@ struct LoginView: View {
   @State private var resendSeconds = 0
   @State private var resendTimer: Task<Void, Never>?
   @State private var registerPhone: String?
+  @State private var legal: LegalDoc?
   @FocusState private var focus: Field?
 
   private enum Field { case phone, otp }
@@ -37,6 +38,9 @@ struct LoginView: View {
       .hiddenNavigationBar()
     }
     .onDisappear { resendTimer?.cancel() }
+    .sheet(item: $legal) { doc in
+      CompatNavigationStack { LegalDocumentView(doc: doc) }.environmentObject(app)
+    }
   }
 
   // MARK: Card
@@ -89,11 +93,21 @@ struct LoginView: View {
       .disabled(isBusy)
       .padding(.top, 24)
 
-      Text(
-        showOTPStep
-          ? "By continuing you agree to our Terms & Privacy Policy"
-          : "We'll send a 4-digit OTP to verify your number"
-      )
+      Group {
+        if showOTPStep {
+          // Each document opens from its own name.
+          HStack(spacing: 4) {
+            Text("By continuing you agree to our")
+            Button("Terms") { legal = .terms }.font(.inter(12, .bold))
+            Text("&")
+            Button("Privacy Policy") { legal = .privacy }.font(.inter(12, .bold))
+          }
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+        } else {
+          Text("We'll send a 4-digit OTP to verify your number")
+        }
+      }
       .font(.inter(12))
       .foregroundStyle(AppColors.primary)
       .frame(maxWidth: .infinity)

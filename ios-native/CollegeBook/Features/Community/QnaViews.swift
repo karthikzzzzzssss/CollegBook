@@ -44,7 +44,7 @@ struct QnaItem: Identifiable {
   let date: String?
   let tags: [String]
   let totalComment: Int
-  let answers: [(text: String, name: String)]
+  let answers: [(id: Int, text: String, name: String)]
 
   init(_ json: JSONObject) {
     id = json.int("id") ?? 0
@@ -55,7 +55,7 @@ struct QnaItem: Identifiable {
     totalComment = json.int("total_comment") ?? 0
     answers = json.objects("comments").compactMap {
       let text = plain($0["comment"] as? String)
-      return text.isEmpty ? nil : (text, cleanName($0["name"] as? String))
+      return text.isEmpty ? nil : ($0.int("id") ?? 0, text, cleanName($0["name"] as? String))
     }
   }
 }
@@ -71,6 +71,7 @@ struct QnaListView: View {
   let onAnswered: () -> Void
 
   @EnvironmentObject private var app: AppState
+  @ObservedObject private var moderation = Moderation.shared
   @State private var items: [QnaItem] = []
   @State private var page = 1
   @State private var lastPage = false
@@ -88,8 +89,15 @@ struct QnaListView: View {
         LazyVStack(spacing: 0) {
           Color.clear.frame(height: 4).id("top")
           ForEach(items) { item in
-            QuestionCard(item: item) { opened = item }
-              .onAppear { if item.id == items.last?.id { Task { await load() } } }
+            Group {
+              if moderation.isHidden("question:\(item.id)", by: item.name) {
+                // Kept as a sliver so reaching the end still loads the next page.
+                Color.clear.frame(height: 1)
+              } else {
+                QuestionCard(item: item) { opened = item }
+              }
+            }
+            .onAppear { if item.id == items.last?.id { Task { await load() } } }
           }
         }
         .padding(.bottom, 108)
@@ -186,10 +194,12 @@ private struct EmptyQnaState: View {
 private struct QuestionCard: View {
   let item: QnaItem
   let onOpen: () -> Void
+  @ObservedObject private var moderation = Moderation.shared
 
   var body: some View {
     let poster = item.name.isEmpty ? "Guest" : item.name
     let count = max(item.totalComment, item.answers.count)
+    let answers = item.answers.filter { !moderation.isHidden("answer:\($0.id)", by: $0.name) }
     Button(action: onOpen) {
       VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: 10) {
@@ -202,12 +212,14 @@ private struct QuestionCard: View {
             }
           }
           Spacer(minLength: 0)
+          // Room for the ••• menu laid over the card.
+          Color.clear.frame(width: 30, height: 1)
         }
         .padding(.horizontal, 14)
         Text(item.title).font(.inter(16, .bold)).foregroundStyle(textDark).lineSpacing(5)
           .multilineTextAlignment(.leading)
           .padding(EdgeInsets(top: 10, leading: 14, bottom: 0, trailing: 14))
-        if !item.answers.isEmpty { AnswerCards(question: item.title, answers: item.answers).padding(.top, 12) }
+        if !answers.isEmpty { AnswerCards(question: item.title, answers: answers).padding(.top, 12) }
         Rectangle().fill(Color(hex: 0xEEEAE2)).frame(height: 1).padding(.top, 12)
         HStack(spacing: 6) {
           Image("ic_comment_outline_small").renderingMode(.template).resizable().frame(width: 16, height: 16)
@@ -230,6 +242,11 @@ private struct QuestionCard: View {
       .shadow(color: .black.opacity(0.18), radius: 1, y: 0.5)
     }
     .buttonStyle(.plain)
+    // Over the card, not inside its button, so it takes its own taps.
+    .overlay(alignment: .topTrailing) {
+      ModerationMenu(content: "question:\(item.id)", kind: "question", author: item.name, text: item.title)
+        .padding(.top, 6).padding(.trailing, 4)
+    }
     .padding(EdgeInsets(top: 12, leading: 12, bottom: 0, trailing: 12))
   }
 }
@@ -238,7 +255,7 @@ private struct QuestionCard: View {
 /// so the next one peeks in. "... Read More" opens the full answer.
 private struct AnswerCards: View {
   let question: String
-  let answers: [(text: String, name: String)]
+  let answers: [(id: Int, text: String, name: String)]
 
   @State private var detail: Int?
 
@@ -333,7 +350,7 @@ private struct ReadMoreText: View {
 /// bottom_sheet_news_detail.xml with the question and the full answer.
 private struct AnswerDetailSheet: View {
   let question: String
-  let answer: (text: String, name: String)
+  let answer: (id: Int, text: String, name: String)
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
@@ -383,6 +400,7 @@ struct AnswersSheet: View {
 
   @EnvironmentObject private var app: AppState
   @Environment(\.dismiss) private var dismiss
+  @ObservedObject private var moderation = Moderation.shared
   @State private var answers: [Answer]?
   @State private var loadFailed = false
   @State private var input = ""
@@ -406,6 +424,9 @@ struct AnswersSheet: View {
       HStack {
         Text("Question & Answers").font(.inter(16, .bold)).foregroundStyle(sheetText)
         Spacer()
+        ModerationMenu(content: "question:\(item.id)", kind: "question", author: item.name, text: item.title) {
+          dismiss()
+        }
         Button {
           dismiss()
         } label: {
@@ -436,7 +457,9 @@ struct AnswersSheet: View {
           Text(answers == nil ? (loadFailed ? "COULDN'T LOAD ANSWERS" : "ANSWERS") : count == 0 ? "NO ANSWERS YET" : count == 1 ? "1 ANSWER" : "\(count) ANSWERS")
             .font(.inter(12, .semibold)).kerning(0.72).foregroundStyle(meta)
             .padding(EdgeInsets(top: 16, leading: 16, bottom: 6, trailing: 16))
-          ForEach(answers ?? []) { answer in answerRow(answer) }
+          ForEach(answers ?? []) { answer in
+            if !moderation.isHidden("answer:\(answer.id)", by: author(of: answer)) { answerRow(answer) }
+          }
         }
         .padding(.bottom, 12)
         .id(revision)
@@ -481,6 +504,11 @@ struct AnswersSheet: View {
   }
 
   /// article_comments_row.xml.
+  /// The answers here come without names; the question's preview has them.
+  private func author(of answer: Answer) -> String {
+    item.answers.first { $0.id == answer.id }?.name ?? ""
+  }
+
   private func answerRow(_ answer: Answer) -> some View {
     let on = AppColors.primary
     let off = Color(hex: 0x455A64)
@@ -507,6 +535,9 @@ struct AnswersSheet: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Downvote")
+        Spacer(minLength: 0)
+        ModerationMenu(content: "answer:\(answer.id)", kind: "answer", author: author(of: answer), text: answer.text)
+          .padding(.trailing, -10)
       }
     }
     .padding(EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14))

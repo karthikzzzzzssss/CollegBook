@@ -10,7 +10,6 @@
 		CB0000000000000000000121 /* RtcBasic in Frameworks */ = {isa = PBXBuildFile; productRef = CB0000000000000000000111 /* RtcBasic */; };
 		CB0000000000000000000122 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = CB0000000000000000000112 /* FirebaseCore */; };
 		CB0000000000000000000123 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = CB0000000000000000000113 /* FirebaseCrashlytics */; };
-		CB0000000000000000000124 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = CB0000000000000000000114 /* FirebaseAnalytics */; };
 		CB0000000000000000000125 /* RazorpayCheckout in Frameworks */ = {isa = PBXBuildFile; productRef = CB0000000000000000000115 /* RazorpayCheckout */; };
 /* End PBXBuildFile section */
 
@@ -39,7 +38,6 @@
 				CB0000000000000000000121 /* RtcBasic in Frameworks */,
 				CB0000000000000000000122 /* FirebaseCore in Frameworks */,
 				CB0000000000000000000123 /* FirebaseCrashlytics in Frameworks */,
-				CB0000000000000000000124 /* FirebaseAnalytics in Frameworks */,
 				CB0000000000000000000125 /* RazorpayCheckout in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -87,7 +85,6 @@
 				CB0000000000000000000111 /* RtcBasic */,
 				CB0000000000000000000112 /* FirebaseCore */,
 				CB0000000000000000000113 /* FirebaseCrashlytics */,
-				CB0000000000000000000114 /* FirebaseAnalytics */,
 				CB0000000000000000000115 /* RazorpayCheckout */,
 			);
 			productName = CollegeBook;
@@ -161,7 +158,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Config/CollegeBook.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2.0.4;
+				CURRENT_PROJECT_VERSION = 2.0.5;
 				DEVELOPMENT_TEAM = GJ48292G4Y;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
@@ -195,7 +192,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Config/CollegeBook.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2.0.4;
+				CURRENT_PROJECT_VERSION = 2.0.5;
 				DEVELOPMENT_TEAM = GJ48292G4Y;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
@@ -334,11 +331,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = CB0000000000000000000102 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCrashlytics;
-		};
-		CB0000000000000000000114 /* FirebaseAnalytics */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = CB0000000000000000000102 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAnalytics;
 		};
 		CB0000000000000000000115 /* RazorpayCheckout */ = {
 			isa = XCSwiftPackageProductDependency;

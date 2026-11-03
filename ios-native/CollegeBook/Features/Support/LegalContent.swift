@@ -4,8 +4,10 @@
 let supportPhone = "8500001406"
 let supportPhoneDisplay = "+91 85000 01406"
 
-enum LegalDoc: String, Hashable {
+enum LegalDoc: String, Hashable, Identifiable {
   case privacy, terms
+
+  var id: String { rawValue }
 
   var title: String { self == .privacy ? "Privacy Policy" : "Terms & Conditions" }
 
@@ -42,6 +44,7 @@ private let termsSections: [(String, String)] = [
   ("Wallet, payments & premium", "Prices are in Indian Rupees and are shown before you pay. Payments are processed securely by Razorpay. Wallet balance can be used only for services inside CollegeBook and cannot be transferred to another account."),
   ("Acceptable use", "Do not misuse the app: no false information, harassment, abusive or misleading content, spam, attempts to break or overload our systems, automated scraping, or copying and republishing CollegeBook data. Accounts that break these rules may be suspended."),
   ("Community content", "You are responsible for what you post. By posting, you allow CollegeBook to display it in the app. We may remove content that breaks these Terms or the law."),
+  ("Community rules", "CollegeBook has zero tolerance for objectionable content and abusive users. Do not post anything hateful, harassing, sexual, violent, threatening or illegal, or anyone's personal information. Any chat message can be reported or its sender blocked from the menu you get by pressing and holding it, and any question or answer from its ••• menu. Blocking someone hides everything they post from you. Our team reviews reports within 24 hours, removes content that breaks these rules and blocks the people who post it."),
   ("Intellectual property", "The app's design, software, compiled data, analysis and content belong to MiniBrain. You may use them for your own counselling only – not for resale, coaching material or building a competing product."),
   ("Suspension & termination", "You may stop using CollegeBook and delete your account from the app's side menu at any time. We may suspend or close accounts that misuse the service or break these Terms."),
   ("Limitation of liability", "CollegeBook is provided \"as is\". To the extent the law allows, we are not liable for decisions made using information in the app, for missed counselling deadlines, or for indirect losses. Our total liability is limited to the amount you paid us in the three months before the claim."),

@@ -35,7 +35,10 @@ final class AppState: ObservableObject {
     route = session.hasSession ? .home : .login
   }
 
-  func signedIn() { route = .home }
+  func signedIn() {
+    Moderation.shared.reload()
+    route = .home
+  }
 
   func signOut() {
     resetUserState()
@@ -49,6 +52,7 @@ final class AppState: ObservableObject {
     coveringScreens = 0
     DefaultStateStore.value = ""
     ChoiceListRepository.shared.reset()
+    Moderation.shared.reload()
   }
 
   /// Toasts get their own window, to show over full-screen covers, sheets and

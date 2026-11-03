@@ -598,6 +598,7 @@ struct GroupChatView: View {
   @EnvironmentObject private var app: AppState
   @Environment(\.scenePhase) private var scenePhase
   @StateObject private var model = GroupChatModel()
+  @ObservedObject private var moderation = Moderation.shared
   @State private var input = ""
   @State private var attachmentsOpen = false
   @State private var visible = Set<String>()
@@ -778,6 +779,9 @@ struct GroupChatView: View {
     let m = model.list[index]
     if m.type == .header {
       DateHeaderChip(label: m.dateLabel ?? "").padding(.vertical, 4).frame(maxWidth: .infinity)
+    } else if !m.mine, moderation.isHidden("chat:\(m.id)", by: m.username) {
+      // Reported, or from someone blocked. The row stays so paging still sees it.
+      Color.clear.frame(height: 1)
     } else {
       let previous = index > 0 ? model.list[index - 1] : nil
       let first = previous == nil || previous!.type == .header || previous!.username != m.username
@@ -809,6 +813,19 @@ struct GroupChatView: View {
         Button("Reply", systemImage: "arrowshape.turn.up.left") { reply(model, m) }
         if let text = m.text, !text.isEmpty {
           Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        }
+        if !m.mine {
+          Button("Report message", systemImage: "exclamationmark.bubble") {
+            Task {
+              await moderation.report(
+                "chat:\(m.id)", kind: "message", by: m.username, text: m.text ?? m.fileName ?? "attachment")
+            }
+          }
+          if Moderation.canBlock(m.username) {
+            Button("Block \(m.username)", systemImage: "hand.raised", role: .destructive) {
+              Task { await moderation.block(m.username) }
+            }
+          }
         }
       }
     }

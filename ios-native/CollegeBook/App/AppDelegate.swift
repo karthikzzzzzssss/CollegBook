@@ -2,7 +2,7 @@ import FirebaseCore
 import FirebaseCrashlytics
 import UIKit
 
-/// main.dart's start-up: Firebase (Crashlytics, Analytics) and PushKit for
+/// main.dart's start-up: Firebase (Crashlytics) and PushKit for
 /// mentor calls.
 final class AppDelegate: NSObject, UIApplicationDelegate {
   func application(
