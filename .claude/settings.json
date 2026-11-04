@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf ~/Library/Developer/Xcode/DerivedData/Runner-* && flutter build ios --simulator --debug 2>&1 | grep -vE \"^\\\\s*note:\" | tail -8)",
+      "Bash(flutter run *)",
+      "Bash(osascript -e 'tell application \"Simulator\" to activate' -e 'tell application \"System Events\" to tell process \"Simulator\" to get {position, size} of window 1')",
+      "Bash(open -a Simulator --args -CurrentDeviceUDID 8EC8889D-DF51-49D1-9530-E6628A357CA7)",
+      "Bash(xcode-select -p)",
+      "Bash(open \"$\\(xcode-select -p\\)/Applications/Simulator.app\" --args -CurrentDeviceUDID 8EC8889D-DF51-49D1-9530-E6628A357CA7)",
+      "Bash(mdfind \"kMDItemCFBundleIdentifier == 'com.apple.iphonesimulator'\")",
+      "Read(//Applications/**)",
+      "Read(//Applications/Xcode.app/Contents/Developer/**)",
+      "Read(//Applications/Xcode.app/**)",
+      "Bash(xcodebuild -version)",
+      "Bash(xcrun simctl *)",
+      "Bash(xcrun --find Simulator)",
+      "Bash(/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump)",
+      "Read(//Applications/Xcode.app/Contents/**)",
+      "Read(//Users/karthik/Applications/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/karthik/Library/Developer/Xcode/DerivedData"
+    ]
+  }
+}

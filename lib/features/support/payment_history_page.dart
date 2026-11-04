@@ -159,7 +159,7 @@ class _PaymentHistoryPageState extends State<PaymentHistoryPage> {
                       ),
                       const SizedBox(width: 4),
                       const Text(
-                        'Payment History',
+                        'My Sessions',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 16,

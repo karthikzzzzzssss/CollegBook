@@ -313,11 +313,11 @@ class _VideoCallPageState extends State<VideoCallPage> {
     });
   }
 
-  /// Auto-cancel when the mentor doesn't join within 15s.
+  /// Auto-cancel when the mentor doesn't join within the 30s they're rung for.
   void _startWaitingTimer() {
-    _waitingTimer = Timer(const Duration(seconds: 15), () async {
+    _waitingTimer = Timer(const Duration(seconds: 30), () async {
       if (_remoteConnected || _apiCallInProgress || !mounted) return;
-      debugPrint('CallSocketManager: 15s wait timer fired');
+      debugPrint('CallSocketManager: 30s wait timer fired');
       showToast(context, 'No response. Cancelling call...');
       _apiCallInProgress = true;
       await _endCall();

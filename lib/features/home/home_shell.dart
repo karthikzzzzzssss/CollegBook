@@ -142,6 +142,38 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     }
   }
 
+  /// A mentor who logs out stops taking calls: "Available for calls" is
+  /// switched off first, while the login still works. Best effort, and never
+  /// holds up the logout for more than a few seconds.
+  Future<void> _goOfflineIfMentor() async {
+    Future<void> goOffline() async {
+      // Like As a Mentor: the status can come back as an error's payload.
+      Map<String, dynamic>? json;
+      try {
+        json = await _apiRepository.send('GET', 'college/counsellor/');
+      } on CollegeGuideApiException catch (e) {
+        json = e.payload;
+      }
+      if (json == null) return;
+      final data = json['data'];
+      if (json['message'] == 'COUNSELLOR_PROFILE' &&
+          data is Map &&
+          data['is_available'] == true) {
+        await _apiRepository.send(
+          'PUT',
+          'college/counsellor/profile/',
+          body: {'is_available': false},
+        );
+      }
+    }
+
+    try {
+      await goOffline().timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // Not a mentor (the status call fails), offline, or too slow.
+    }
+  }
+
   Future<void> _logout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -171,6 +203,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     try {
       final access = await _sessionStore.readAccessToken();
       if (access != null) {
+        await _goOfflineIfMentor();
         await auth.logout(
           accessToken: access,
           refreshToken: await _sessionStore.readRefreshToken(),
@@ -278,13 +311,20 @@ class _BottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Like a native UITabBar, let the bar tuck part-way into the iPhone
+    // home-indicator inset instead of stacking a full 34pt below it.
+    final inset = MediaQuery.viewPaddingOf(context).bottom;
+    final bottom =
+        Theme.of(context).platform == TargetPlatform.iOS && inset > 0
+            ? (inset - 14).clamp(0.0, inset)
+            : inset;
     return ColoredBox(
       key: const Key('mainNavigation'),
       color: AppColors.primary,
-      child: SafeArea(
-        top: false,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottom),
         child: SizedBox(
-          height: 80,
+          height: 60,
           child: Row(
             children: [
               for (var i = 0; i < _items.length; i++)
@@ -333,12 +373,12 @@ class _BottomNavItem extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        // M3 BottomNavigationView: the indicator pill 12dp from the top,
-        // the label just under it.
+        // M3 BottomNavigationView: the indicator pill near the top, the label
+        // just under it.
         child: LayoutBuilder(
           builder: (context, box) => Column(
             children: [
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               Container(
                 // 64dp, less the indicator's 4dp side margins on narrow items.
                 width: (box.maxWidth - 8).clamp(0, 64).toDouble(),
@@ -476,7 +516,7 @@ class _SideMenuState extends State<_SideMenu> {
             const SizedBox(height: 8),
             for (final (id, icon, label) in const [
               ('mentor', 'ic_menu_mentor', 'As a Mentor'),
-              ('payments', 'ic_payment', 'Payment History'),
+              ('payments', 'ic_payment', 'My Sessions'),
               ('share', 'ic_share', 'Share App'),
             ])
               _SideMenuItem(icon: icon, label: label, onTap: () => _select(id)),
