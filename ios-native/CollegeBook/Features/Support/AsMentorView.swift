@@ -19,6 +19,7 @@ struct AsMentorView: View {
   @State private var loadingHistory = false
   @State private var historyLoaded = false
   @State private var registering = false
+  @State private var editingProfile = false
 
   var body: some View {
     VStack(spacing: 0) {
@@ -60,10 +61,17 @@ struct AsMentorView: View {
     .background(AppColors.primary.ignoresSafeArea())
     .hiddenNavigationBar()
     .task { await fetchStatus() }
-    .compatDestination(isPresented: $registering) { MentorRegistrationView() }
+    // A cover, not a push: pushes inside this side-menu screen freeze SwiftUI on iOS 17.
+    .fullScreenCover(isPresented: $registering) {
+      CompatNavigationStack { MentorRegistrationView() }.environmentObject(app)
+    }
     .onChangeCompat(of: registering) { _, open in
       // onResume: re-check (now "under review" after a submit).
       if !open { Task { await fetchStatus() } }
+    }
+    // Edit Profile (PGCounselorFragment's ivEditProfile); the profile reloads when it closes.
+    .fullScreenCover(isPresented: $editingProfile, onDismiss: { Task { await fetchStatus() } }) {
+      CompatNavigationStack { MentorRegistrationView(editing: profile) }.environmentObject(app)
     }
   }
 
@@ -247,6 +255,15 @@ struct AsMentorView: View {
               .padding(.top, 6)
             }
           }
+          Spacer(minLength: 4)
+          Button {
+            editingProfile = true
+          } label: {
+            Image(systemName: "pencil").font(.system(size: 18, weight: .semibold)).foregroundStyle(AppColors.primary)
+              .frame(width: 36, height: 36).contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Edit profile")
         }
         HStack(spacing: 6) {
           Image("ic_review_verified").resizable().frame(width: 16, height: 16)

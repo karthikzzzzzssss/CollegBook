@@ -36,6 +36,7 @@ struct HomeView: View {
   /// the scroll offset: state set on every scroll frame re-renders all of
   /// Home each frame and cancels a pull-to-refresh mid-request.
   @State private var collapsed = false
+  @Environment(\.horizontalSizeClass) private var sizeClass
   @State private var sheet: DetailSheet?
   @State private var selectedExam: String?
   /// An exam switch is saving: the pill shows a spinner and can't be reopened.
@@ -58,7 +59,9 @@ struct HomeView: View {
         ScrollViewReader { proxy in
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-              banner(topInset: topInset)
+              // Tablets: the 2:1 art at the phone's fixed 250pt would crop to a thin
+              // strip, so it is sized from the width (as Android's sw600dp layout).
+              banner(topInset: topInset, height: sizeClass == .regular ? (outer.size.width / 3).rounded() : 250)
               if !firstLoadDone {
                 ProgressView().tint(AppColors.primary).controlSize(.large)
                   .frame(maxWidth: .infinity).padding(.top, 160)
@@ -71,6 +74,7 @@ struct HomeView: View {
                   withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("completeNeet", anchor: anchor) }
                 }
                 .padding(.bottom, 64)
+                .tabletContentWidth()
               }
             }
           }
@@ -164,7 +168,7 @@ struct HomeView: View {
 
   /// AppBarLayout (250pt) + CollapsingToolbarLayout: the banner scrolls away
   /// with 0.7 parallax while the avatar row stays pinned.
-  private func banner(topInset: CGFloat) -> some View {
+  private func banner(topInset: CGFloat, height: CGFloat) -> some View {
     GeometryReader { geo in
       let minY = geo.frame(in: .named("homeScroll")).minY
       let pull = max(minY, 0)
@@ -173,16 +177,16 @@ struct HomeView: View {
       ZStack(alignment: .top) {
         Color.black
         Image("collegebook_home_banner").resizable().scaledToFill()
-          .frame(width: geo.size.width, height: 250 + pull)
+          .frame(width: geo.size.width, height: height + pull)
           .clipped()
         examPill
           .frame(maxWidth: .infinity)
-          .padding(.top, 250 - 16 - 32 + pull)
+          .padding(.top, height - 16 - 32 + pull)
       }
       .offset(y: shift)
-      .onChangeCompat(of: -minY >= 250 - (topInset + 46)) { _, value in collapsed = value }
+      .onChangeCompat(of: -minY >= height - (topInset + 46)) { _, value in collapsed = value }
     }
-    .frame(height: 250)
+    .frame(height: height)
     .clipped()
   }
 

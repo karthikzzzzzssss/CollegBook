@@ -153,7 +153,9 @@ final class APIClient: @unchecked Sendable {
 
   /// A multipart POST (the chat's text + files). Answers the HTTP status and
   /// the decoded JSON body, if any — the chat reads its own error codes.
-  func postMultipart(_ endpoint: String, fields: [String: String], file: UploadFile?) async throws -> (
+  func postMultipart(
+    _ endpoint: String, method: String = "POST", fields: [String: String], file: UploadFile?
+  ) async throws -> (
     status: Int, json: JSONObject?
   ) {
     func attempt(_ token: String?) async throws -> (Data, HTTPURLResponse) {
@@ -176,7 +178,7 @@ final class APIClient: @unchecked Sendable {
       }
       line("--\(boundary)--")
       var request = URLRequest(url: url(endpoint))
-      request.httpMethod = "POST"
+      request.httpMethod = method
       request.timeoutInterval = 90
       request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
       if let token, !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }

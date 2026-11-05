@@ -13,9 +13,13 @@ final class Mentor: Identifiable, ObservableObject {
   let designation: String
   let instituteName: String
   let degree: String
-  let available: Bool?
+  /// "online", "busy" or "offline" (CollegePlanCounselorModel.getPresence);
+  /// nil when the server says nothing.
+  let presence: String?
   @Published var liked: Bool
   let expertise: [String]
+  /// "Hindi, Telugu"; "" when the mentor hasn't set any.
+  let languages: String
   let fee: String
   let duration: String
 
@@ -27,23 +31,28 @@ final class Mentor: Identifiable, ObservableObject {
     designation = (json["designation"] as? String ?? "").trimmingCharacters(in: .whitespaces)
     instituteName = json["institute_name"] as? String ?? ""
     degree = (json["degree"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-    var available = json["is_available"] as? Bool
-    // Where the server sends it, presence is the live state; is_available is
-    // only the mentor's own switch.
-    if available != false, let presence = json["presence"] as? String { available = presence == "online" }
+    // The live presence where the server sends it, else the mentor's own switch.
+    var presence = (json["presence"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased()
+    if presence?.isEmpty != false {
+      presence = (json["is_available"] as? Bool).map { $0 ? "online" : "offline" }
+    }
     #if DEBUG
       // `-mentorsOffline YES`: every mentor offline, to check that card.
-      if UserDefaults.standard.bool(forKey: "mentorsOffline") { available = false }
+      if UserDefaults.standard.bool(forKey: "mentorsOffline") { presence = "offline" }
       // `-mentorsOfflineAfter <seconds>`: all go offline that long after launch,
       // to check that a list on screen picks it up.
       let after = UserDefaults.standard.double(forKey: "mentorsOfflineAfter")
-      if after > 0, Date().timeIntervalSince(launchedAt) > after { available = false }
+      if after > 0, Date().timeIntervalSince(launchedAt) > after { presence = "offline" }
     #endif
-    self.available = available
+    self.presence = presence
     liked = json.bool("like_status") == true
     expertise = json.objects("expert").compactMap { $0.string("name") }
+    languages = MentorLanguages.display(json["know_language"] as? String)
     let appointment = json.object("appointment") ?? [:]
-    fee = appointment.string("consultation_fee") ?? "0"
+    // "15.00" → "15", as getDisplayFee does; "15.50" stays.
+    let rawFee = appointment.string("consultation_fee") ?? "0"
+    fee = rawFee.range(of: #"^\d+\.0+$"#, options: .regularExpression) != nil
+      ? String(rawFee.prefix { $0 != "." }) : rawFee
     duration = appointment.string("duration") ?? ""
   }
 }
@@ -95,7 +104,7 @@ struct MentorView: View {
                     Text("Available mentors").font(.inter(16, .semibold)).foregroundStyle(appInk)
                       .padding(EdgeInsets(top: 20, leading: 16, bottom: 6, trailing: 16))
                   }
-                  ForEach(Array(mentors.enumerated()), id: \.element.id) { index, mentor in
+                  TabletList(Array(mentors.enumerated()), id: \.element.id) { index, mentor in
                     MentorCard(mentor: mentor)
                       .onAppear {
                         // Native: next page once scrolled to the end.
@@ -264,12 +273,16 @@ struct MentorCard: View {
 
   var body: some View {
     let m = mentor
-    let college = m.speciality.map { "\($0) • \(m.instituteName)" } ?? m.instituteName
-    let location = m.degree.isEmpty ? college : "\(college) • \(m.degree)"
+    // Name, then institute, then "Speciality • Designation", then languages
+    // (ListOfCounselorsAdapter).
+    let institute = m.instituteName.trimmingCharacters(in: .whitespaces)
+    let role = [m.speciality?.trimmingCharacters(in: .whitespaces) ?? "", m.designation].filter { !$0.isEmpty }
+      .joined(separator: " • ")
     let shown = expanded ? m.expertise.count : min(m.expertise.count, Self.collapsed)
     let hidden = m.expertise.count - shown
-    // Only an explicit "offline" from the server greys the card out.
-    let offline = m.available == false
+    // Only an explicit "offline" greys the card out; busy and offline can't be called.
+    let offline = m.presence == "offline"
+    let busy = m.presence == "busy"
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .top, spacing: 14) {
         ZStack(alignment: .topLeading) {
@@ -277,7 +290,7 @@ struct MentorCard: View {
             // Offline: the photo washed out.
             .saturation(offline ? 0.5 : 1)
             .overlay(Color.white.opacity(offline ? 0.45 : 0))
-          if let available = m.available { availability(available).padding(6) }
+          if let presence = m.presence { availability(presence).padding(6) }
         }
         .frame(width: 92, height: 112)
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -297,18 +310,23 @@ struct MentorCard: View {
             .buttonStyle(.plain)
             .accessibilityLabel(m.liked ? "Remove from favourites" : "Add to favourites")
           }
-          if !m.designation.isEmpty {
-            Text(m.designation).font(.inter(13, .semibold)).foregroundStyle(stateGreen).padding(.top, 2)
+          if !institute.isEmpty {
+            HStack(alignment: .top, spacing: 6) {
+              Image("ic_building").renderingMode(.template).resizable().frame(width: 14, height: 14)
+                .foregroundStyle(mentorSecondary).padding(.top, 2)
+              Text(institute).font(.inter(12, .medium)).foregroundStyle(mentorSecondary).lineSpacing(3)
+            }
+            .padding(.top, 4)
           }
-          HStack(alignment: .top, spacing: 6) {
-            Image("ic_building").renderingMode(.template).resizable().frame(width: 14, height: 14)
-              .foregroundStyle(mentorSecondary).padding(.top, 2)
-            Text(location).font(.inter(12, .medium)).foregroundStyle(mentorSecondary).lineSpacing(3)
+          if !role.isEmpty {
+            Text(role).font(.inter(13, .semibold)).foregroundStyle(stateGreen).padding(.top, 4)
           }
-          .padding(.top, 6)
-          // The native layout's fixed text (the adapter never sets it).
-          Text("⭐ 4.9 (256)   👥 320 Students Guided ").font(.inter(12, .medium)).foregroundStyle(appInk)
-            .padding(.top, 6)
+          // Hidden when the mentor hasn't set any.
+          if !m.languages.isEmpty {
+            Text("Known languages: \(m.languages)").font(.inter(12, .medium)).foregroundStyle(mentorSecondary)
+              .padding(.top, 4)
+          }
+          // (The rating line is hidden on Android: tvRatingInfo is visibility gone.)
         }
       }
 
@@ -327,17 +345,17 @@ struct MentorCard: View {
         .padding(.top, 10)
       }
 
-      if offline {
-        // Can't be called while offline: a grey, inactive bar.
+      if offline || busy {
+        // Can't be called while offline or in another call: a grey, inactive bar.
         HStack(spacing: 8) {
           Image("phone_in_talk").renderingMode(.template).resizable().frame(width: 18, height: 18)
-          Text("Currently offline").font(.inter(15, .semibold))
+          Text(busy ? "In another call" : "Currently offline").font(.inter(15, .semibold))
         }
         .foregroundStyle(mentorSecondary)
         .frame(maxWidth: .infinity).frame(height: 46)
         .background(Color(hex: 0xE5E7EB), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(m.name) is currently offline")
+        .accessibilityLabel(busy ? "\(m.name) is in another call" : "\(m.name) is currently offline")
         .padding(.top, 14)
       } else {
         Button {
@@ -368,15 +386,21 @@ struct MentorCard: View {
       .background(more ? stateGreen : Color(hex: 0xEEF5F1), in: Capsule())
   }
 
-  private func availability(_ available: Bool) -> some View {
-    HStack(spacing: 4) {
-      Circle().fill(available ? Color(hex: 0x22C55E) : Color(hex: 0x9CA3AF)).frame(width: 6, height: 6)
-      Text(available ? "Online" : "Offline").font(.inter(9, .semibold))
-        .foregroundStyle(available ? Color(hex: 0x15803D) : mentorSecondary)
+  /// tvOnlineBadge: Online (green), In a call (amber), Offline (grey).
+  private func availability(_ presence: String) -> some View {
+    let (dot, text, fill, stroke, label): (UInt32, Color, UInt32, Color, String) =
+      switch presence {
+      case "online": (0x22C55E, Color(hex: 0x15803D), 0xDCFCE7, Color(hex: 0x86EFAC), "Online")
+      case "busy": (0xF59E0B, Color(hex: 0xB45309), 0xFEF3C7, Color(hex: 0xFCD34D), "In a call")
+      default: (0x9CA3AF, mentorSecondary, 0xF3F4F6, mentorStroke, "Offline")
+      }
+    return HStack(spacing: 4) {
+      Circle().fill(Color(hex: dot)).frame(width: 6, height: 6)
+      Text(label).font(.inter(9, .semibold)).foregroundStyle(text)
     }
     .padding(.horizontal, 7).padding(.vertical, 2)
-    .background(available ? Color(hex: 0xDCFCE7) : Color(hex: 0xF3F4F6), in: Capsule())
-    .overlay(Capsule().stroke(available ? Color(hex: 0x86EFAC) : mentorStroke))
+    .background(Color(hex: fill), in: Capsule())
+    .overlay(Capsule().stroke(stroke))
   }
 
   /// The heart flips at once; it flips back if the server refuses.

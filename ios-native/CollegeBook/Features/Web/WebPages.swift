@@ -46,6 +46,7 @@ private struct AuthWebViewRepresentable: UIViewRepresentable {
   func makeUIView(context: Context) -> WKWebView {
     let web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
     web.navigationDelegate = context.coordinator
+    web.uiDelegate = context.coordinator
     web.backgroundColor = .white
     web.isOpaque = false
     context.coordinator.source = url
@@ -61,7 +62,7 @@ private struct AuthWebViewRepresentable: UIViewRepresentable {
     }
   }
 
-  final class Coordinator: NSObject, WKNavigationDelegate {
+  final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     var parent: AuthWebViewRepresentable
     /// The URL last loaded with headers by us, let through once.
     private var authLoad: URL?
@@ -82,14 +83,47 @@ private struct AuthWebViewRepresentable: UIViewRepresentable {
       _ web: WKWebView, decidePolicyFor action: WKNavigationAction,
       decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-      guard let url = action.request.url, action.targetFrame?.isMainFrame ?? true,
-        url.host == APIClient.shared.apiHost
+      guard let url = action.request.url else { return decisionHandler(.allow) }
+      // tel:, mailto:, maps: and the like belong to their own apps; a web view
+      // can only fail on them.
+      if let scheme = url.scheme?.lowercased(), !["http", "https", "about", "data", "blob"].contains(scheme) {
+        decisionHandler(.cancel)
+        openOutside(url)
+        return
+      }
+      // A link the user taps out of the server page (college website, Google
+      // Maps) opens in Safari or its app, so Back still returns to the page.
+      if action.navigationType == .linkActivated, action.targetFrame?.isMainFrame ?? true,
+        url.host != APIClient.shared.apiHost
+      {
+        decisionHandler(.cancel)
+        openOutside(url)
+        return
+      }
+      guard action.targetFrame?.isMainFrame ?? true, url.host == APIClient.shared.apiHost
       else { return decisionHandler(.allow) }
       if url == authLoad || action.request.value(forHTTPHeaderField: "Authorization") != nil {
         return decisionHandler(.allow)
       }
       decisionHandler(.cancel)
       load(url, in: web)
+    }
+
+    /// target="_blank" links and window.open() (the website and "Open in
+    /// Google Maps" links, the embedded map's own buttons): without this a web
+    /// view silently drops them.
+    func webView(
+      _ web: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+      for action: WKNavigationAction, windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+      if let url = action.request.url {
+        if url.host == APIClient.shared.apiHost { load(url, in: web) } else { openOutside(url) }
+      }
+      return nil
+    }
+
+    private func openOutside(_ url: URL) {
+      DispatchQueue.main.async { UIApplication.shared.open(url) }
     }
 
     /// A server error page (401, 500…) counts as a failed load, not a page.
@@ -323,7 +357,7 @@ struct HTMLView: UIViewRepresentable {
     web.loadHTMLString(html, baseURL: baseURL)
   }
 
-  final class Coordinator: NSObject, WKNavigationDelegate {
+  final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     let onFinish: (() -> Void)?
     var loaded: String?
     init(onFinish: (() -> Void)?) { self.onFinish = onFinish }

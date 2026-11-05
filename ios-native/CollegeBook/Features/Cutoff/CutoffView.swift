@@ -235,7 +235,7 @@ private struct CollegesPage: View {
         Text(filterBy).font(.inter(11)).foregroundStyle(.white).padding(.leading, 19).padding(.top, 10)
         ScrollView {
           LazyVStack(spacing: 0) {
-            ForEach(Array(colleges.enumerated()), id: \.offset) { index, college in
+            TabletList(Array(colleges.enumerated()), id: \.offset) { index, college in
               CollegeCard(
                 college: college, examRank: examRank, isSubscribed: isSubscribed,
                 onOpen: { showDetails(college) },

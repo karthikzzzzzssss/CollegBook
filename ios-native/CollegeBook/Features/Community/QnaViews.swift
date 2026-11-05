@@ -88,7 +88,7 @@ struct QnaListView: View {
       ScrollView {
         LazyVStack(spacing: 0) {
           Color.clear.frame(height: 4).id("top")
-          ForEach(items) { item in
+          TabletList(items) { item in
             Group {
               if moderation.isHidden("question:\(item.id)", by: item.name) {
                 // Kept as a sliver so reaching the end still loads the next page.
@@ -258,10 +258,11 @@ private struct AnswerCards: View {
   let answers: [(id: Int, text: String, name: String)]
 
   @State private var detail: Int?
+  @Environment(\.listCellWidth) private var cellWidth
 
   var body: some View {
-    // The question card spans the screen less its 12pt margins.
-    let available = UIScreen.main.bounds.width - 24 - 28
+    // The question card spans the screen (or its tablet column) less its 12pt margins.
+    let available = (cellWidth ?? UIScreen.main.bounds.width) - 24 - 28
     let alone = answers.count == 1
     let cardWidth = alone ? available : (available - 8 * 0.5) / 1.5
     Group {

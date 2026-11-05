@@ -73,6 +73,7 @@ struct RegisterView: View {
           .padding(.top, 42)
         }
         .foregroundStyle(AppColors.allIndia)
+        .tabletContentWidth(TabletUI.loginCardMaxWidth)
       }
     }
     .hiddenNavigationBar()

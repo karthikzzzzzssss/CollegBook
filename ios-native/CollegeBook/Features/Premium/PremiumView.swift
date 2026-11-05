@@ -134,6 +134,7 @@ struct PremiumView: View {
               }
             }
             .padding(.bottom, 32)
+            .tabletContentWidth()
           }
           .coordinateSpace(name: "premium")
           .onPreferenceChange(CardTop.self) { tops in

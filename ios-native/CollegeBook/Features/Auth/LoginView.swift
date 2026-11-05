@@ -29,7 +29,7 @@ struct LoginView: View {
             .accessibilityLabel("CollegeBook")
           card
         }
-        .frame(maxWidth: 480)
+        .frame(maxWidth: TabletUI.loginCardMaxWidth)
       }
       .ignoresSafeArea(.container, edges: .bottom)
       .compatDestination(item: $registerPhone) { phone in

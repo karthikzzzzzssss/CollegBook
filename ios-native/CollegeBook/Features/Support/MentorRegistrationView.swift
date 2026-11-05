@@ -9,10 +9,11 @@ private let muted = Color(hex: 0x6B7280)
 private let hint = Color(hex: 0x9CA3AF)
 private let fieldBorder = Color(hex: 0xDCE3E0)
 private let fieldFill = Color(hex: 0xFAFBFB)
+private let lockedFill = Color(hex: 0xF2F4F5)
 private let errorColor = Color(hex: 0xD93025)
 
-/// The "degree" values the API accepts.
-private let degrees = ["DNB", "Diploma", "M.Ch", "MD", "MS", "Nbems DMRD"]
+/// The "degree" values the API accepts (CounselorRegistrationActivity.DEGREES).
+private let degrees = ["DNB", "Diploma", "M.Ch", "MBBS", "MD", "MS", "Nbems DMRD"]
 /// The least a mentor may charge per minute.
 private let minPerMinute = 10
 
@@ -21,8 +22,33 @@ struct Expert: Hashable, Identifiable {
   let name: String
 }
 
+/// Languages a mentor can talk to students in (CounsellorPickActivity.LANGUAGES).
+/// Shown capitalised; sent as `know_language` in lowercase, comma-separated ("hindi,telugu").
+enum MentorLanguages {
+  static let all = [
+    "Assamese", "Bengali", "English", "Gujarati", "Hindi", "Kannada", "Malayalam", "Marathi", "Odia", "Punjabi", "Tamil",
+    "Telugu", "Urdu",
+  ]
+
+  /// "hindi, telugu" → ["hindi", "telugu"].
+  static func values(_ raw: String?) -> [String] {
+    var seen = Set<String>()
+    return (raw ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  /// The API value for a selection: "hindi,telugu".
+  static func raw(_ values: [String]) -> String { values.joined(separator: ",") }
+
+  static func capitalize(_ word: String) -> String { word.prefix(1).uppercased() + word.dropFirst().lowercased() }
+
+  /// "hindi,telugu" → "Hindi, Telugu"; "" when none.
+  static func display(_ raw: String?) -> String { display(values(raw)) }
+  static func display(_ values: [String]) -> String { values.map(capitalize).joined(separator: ", ") }
+}
+
 private enum Field: CaseIterable {
-  case photo, name, speciality, designation, degree, state, institute, experts, fee
+  case photo, name, speciality, designation, degree, state, institute, experts, languages, fee
 }
 
 private func items(_ json: JSONObject) -> [Expert] {
@@ -31,13 +57,37 @@ private func items(_ json: JSONObject) -> [Expert] {
   }
 }
 
+/// "25.50" → "25.5", "100.00" → "100"; anything unparseable as-is.
+private func plainAmount(_ amount: String) -> String {
+  let number = NSDecimalNumber(string: amount)
+  return number == .notANumber ? amount : number.stringValue
+}
+
+private func sameAmount(_ a: String?, _ b: String?) -> Bool {
+  guard let a, let b else { return false }
+  let x = NSDecimalNumber(string: a), y = NSDecimalNumber(string: b)
+  return x != .notANumber && y != .notANumber && x.compare(y) == .orderedSame
+}
+
+/// "[1,5]", as the API takes (and compares) expertise.
+private func expertIDs(_ experts: [Expert]) -> String { "[\(experts.map { String($0.id) }.joined(separator: ","))]" }
+
 /// Mentor registration: photo, name, speciality, designation, degree, exam
-/// type, state, institute, expertise and per-minute fee, posted as multipart
-/// to college/counsellor/ (CounselorRegistrationActivity's request).
+/// type, state, institute, expertise, languages and per-minute fee, posted as
+/// multipart to college/counsellor/ (CounselorRegistrationActivity's request).
+///
+/// With `editing` (an approved mentor's college/counsellor/ data) it is the
+/// Edit Profile screen instead (the activity's edit mode): name, exam type and
+/// institute are locked (the institute changes through an admin request), and
+/// Save sends only what changed to PUT college/counsellor/profile/.
 struct MentorRegistrationView: View {
+  var editing: JSONObject? = nil
+
   @EnvironmentObject private var app: AppState
   @Environment(\.dismiss) private var dismiss
   @State private var photo: Data?
+  /// Edit mode: the current photo on the server.
+  @State private var photoURL: String?
   @State private var name = ""
   @State private var fee = ""
   @State private var speciality: String?
@@ -46,29 +96,51 @@ struct MentorRegistrationView: View {
   @State private var stateName: String?
   @State private var institute: String?
   @State private var experts: [Expert] = []
+  /// Lowercase API values, e.g. ["hindi", "telugu"]. Optional.
+  @State private var languages: [String] = []
+  @State private var pickingLanguages = false
   /// Inline messages, shown once Submit has been tried.
   @State private var errors: [Field: String] = [:]
   @State private var triedSubmit = false
   @State private var submitting = false
   @State private var choosingPhotoSource = false
   @State private var photoSource: UIImagePickerController.SourceType?
-  @State private var choosingDegree = false
   @State private var picker: PickerRoute?
   @State private var pickingExperts = false
+  @State private var showingHelp = false
+  @State private var showingTerms = false
   @FocusState private var focus: Field?
+
+  // Edit mode
+  /// What the server has, to send only what changed. Nil = not known (yet).
+  @State private var saved = Saved()
+  @State private var loadedEdit = false
+  @State private var loadingRest = false
+  /// The institute asked for in a request still waiting for the admin.
+  @State private var pendingInstitute: String?
+  @State private var requestingInstitute = false
+
+  private struct Saved {
+    var speciality, designation, degree, state, fee, expertIDs: String?
+    var languages: [String] = []
+  }
+
+  private var editMode: Bool { editing != nil }
 
   private struct PickerRoute: Identifiable, Hashable {
     let title: String
-    let endpoint: String
+    var endpoint = ""
     var query: [String: String] = [:]
+    /// A fixed list instead of an endpoint (degree).
+    var options: [String]? = nil
     let field: Field
-    var id: String { endpoint }
+    var id: String { title }
   }
 
   private var hasInput: Bool {
     photo != nil || !name.trimmingCharacters(in: .whitespaces).isEmpty || !fee.trimmingCharacters(in: .whitespaces).isEmpty
       || speciality != nil || designation != nil || degree != nil || stateName != nil || institute != nil
-      || !experts.isEmpty
+      || !experts.isEmpty || !languages.isEmpty
   }
 
   var body: some View {
@@ -77,10 +149,14 @@ struct MentorRegistrationView: View {
       ScrollViewReader { proxy in
         ScrollView {
           VStack(spacing: 12) {
-            introCard.padding(.bottom, 4)
+            if !editMode { introCard.padding(.bottom, 4) }
             photoCard.id(Field.photo)
             section("Professional details", "How students will see you") {
-              textInput(.name, "Full name", "e.g. Dr. Ananya Rao", $name)
+              if editMode {
+                lockedInput("Full name", name)
+              } else {
+                textInput(.name, "Full name", "e.g. Dr. Ananya Rao", $name)
+              }
               selectInput(.speciality, "Speciality", "Select speciality", speciality) {
                 picker = PickerRoute(
                   title: "Select speciality", endpoint: "college/counsellor/drop-down/speciality/", field: .speciality)
@@ -89,24 +165,43 @@ struct MentorRegistrationView: View {
                 picker = PickerRoute(
                   title: "Select designation", endpoint: "college/counsellor/drop-down/designation/", field: .designation)
               }
-              selectInput(.degree, "Degree", "Select degree", degree, sheet: true) { choosingDegree = true }
-              selectInput(nil, "Exam type", "", "NEET PG", locked: true) {}
+              selectInput(.degree, "Degree", "Select degree", degree) {
+                picker = PickerRoute(title: "Select degree", options: degrees, field: .degree)
+              }
+              lockedInput("Exam type", "NEET PG")
             }
             section("Your institute", "Where you study or work now") {
               selectInput(.state, "State", "Select state", stateName) {
                 picker = PickerRoute(title: "Select state", endpoint: "college/counsellor/drop-down/state/", field: .state)
               }
-              selectInput(
-                .institute, "Institute", stateName == nil ? "Select a state first" : "Select institute", institute,
-                disabled: stateName == nil
-              ) {
-                guard let stateName else { return app.show("Please select state first") }
-                picker = PickerRoute(
-                  title: "Select institute", endpoint: "college/counsellor/drop-down/institute_name/",
-                  query: ["state": stateName], field: .institute)
+              if editMode {
+                lockedInput("Institute", institute ?? "")
+                if let pendingInstitute { pendingNotice(pendingInstitute) }
+                requestInstituteButton
+              } else {
+                selectInput(
+                  .institute, "Institute", stateName == nil ? "Select a state first" : "Select institute", institute,
+                  disabled: stateName == nil
+                ) {
+                  guard let stateName else { return app.show("Please select state first") }
+                  picker = PickerRoute(
+                    title: "Select institute", endpoint: "college/counsellor/drop-down/institute_name/",
+                    query: ["state": stateName], field: .institute)
+                }
               }
             }
-            section("Areas of expertise", "Topics you can guide students on") { expertsInput }
+            section("Areas of expertise", "Topics you can guide students on") {
+              selectInput(
+                .experts, "Expertise", "Select expertise",
+                experts.isEmpty ? nil : experts.map(\.name).joined(separator: ", ")
+              ) { pickingExperts = true }
+            }
+            section("Languages", "Languages you can talk to students in") {
+              selectInput(
+                .languages, "Known languages", "Select languages",
+                languages.isEmpty ? nil : MentorLanguages.display(languages)
+              ) { pickingLanguages = true }
+            }
             section("Consultation fee", "Students are charged per minute of call") {
               textInput(
                 .fee, "Fee per minute", "\(minPerMinute)", $fee, prefix: "₹", suffix: "/ min", numeric: true,
@@ -124,32 +219,40 @@ struct MentorRegistrationView: View {
       }
       submitBar
     }
+    .overlay { if loadingRest { loadingOverlay } }
+    // Covers, not pushes: anything pushed inside the side menu's mentor
+    // screens sends SwiftUI into a layout loop (100% CPU, frozen) on iOS 17.
+    .fullScreenCover(isPresented: $pickingLanguages) {
+      LanguagesPickerView(selected: languages) { languages = $0 }.environmentObject(app)
+    }
+    .sheet(isPresented: $requestingInstitute) {
+      InstituteRequestSheet(current: institute ?? "") { requested in pendingInstitute = requested } onAlreadyPending: {
+        Task { await loadPendingInstituteRequest() }
+      }
+      .environmentObject(app)
+      .sheetDetents([.height(530), .large])
+      .sheetDragIndicatorVisible()
+    }
     .background(AppColors.primary.ignoresSafeArea(edges: .top))
     .hiddenNavigationBar()
     .coversTabBar()
+    .task { await setUpEditMode() }
     .onChangeCompat(of: name) { _, _ in revalidate() }
     .onChangeCompat(of: fee) { _, new in
-      let digits = String(new.filter(\.isNumber).prefix(5))
-      if digits != new { fee = digits }
+      // The saved fee can have decimals ("25.50"), unlike at registration.
+      let cleaned: String
+      if editMode {
+        var seenDot = false
+        cleaned = String(
+          new.filter { c in
+            if c == "." { defer { seenDot = true }; return !seenDot }
+            return c.isNumber
+          }.prefix(8))
+      } else {
+        cleaned = String(new.filter(\.isNumber).prefix(5))
+      }
+      if cleaned != new { fee = cleaned }
       revalidate()
-    }
-    .confirmationDialog("Profile photo", isPresented: $choosingPhotoSource, titleVisibility: .visible) {
-      Button("Choose from gallery") { photoSource = .photoLibrary }
-      Button("Take a photo") {
-        if UIImagePickerController.isSourceTypeAvailable(.camera) { photoSource = .camera } else {
-          app.show("Camera not available")
-        }
-      }
-    } message: {
-      Text("Use a clear, recent photo of your face.")
-    }
-    .confirmationDialog("Select degree", isPresented: $choosingDegree, titleVisibility: .visible) {
-      ForEach(degrees, id: \.self) { d in
-        Button(d == degree ? "\(d) ✓" : d) {
-          degree = d
-          revalidate()
-        }
-      }
     }
     .fullScreenCover(item: Binding(get: { photoSource.map { SourceBox(source: $0) } }, set: { photoSource = $0?.source })) {
       box in
@@ -161,16 +264,27 @@ struct MentorRegistrationView: View {
       }
       .ignoresSafeArea()
     }
-    .compatDestination(item: $picker) { route in
-      OptionPickerView(title: route.title, endpoint: route.endpoint, query: route.query, selected: value(route.field)) {
+    .fullScreenCover(item: $picker) { route in
+      OptionPickerView(
+        title: route.title, endpoint: route.endpoint, query: route.query, options: route.options,
+        selected: value(route.field)
+      ) {
         set(route.field, $0)
       }
+      .environmentObject(app)
     }
-    .compatDestination(isPresented: $pickingExperts) {
+    .fullScreenCover(isPresented: $pickingExperts) {
       ExpertsPickerView(selected: experts) {
         experts = $0
         revalidate()
       }
+      .environmentObject(app)
+    }
+    .fullScreenCover(isPresented: $showingHelp) {
+      CompatNavigationStack { ContactUsView() }.environmentObject(app)
+    }
+    .fullScreenCover(isPresented: $showingTerms) {
+      CompatNavigationStack { LegalDocumentView(doc: .terms) }.environmentObject(app)
     }
   }
 
@@ -183,6 +297,7 @@ struct MentorRegistrationView: View {
     switch field {
     case .speciality: speciality
     case .designation: designation
+    case .degree: degree
     case .state: stateName
     case .institute: institute
     default: nil
@@ -193,9 +308,11 @@ struct MentorRegistrationView: View {
     switch field {
     case .speciality: speciality = value
     case .designation: designation = value
+    case .degree: degree = value
     case .state:
-      // The institute list depends on the state.
-      if value != stateName { institute = nil }
+      // The institute list depends on the state; in edit mode the institute
+      // is locked, so the state doesn't touch it.
+      if !editMode, value != stateName { institute = nil }
       stateName = value
     case .institute: institute = value
     default: break
@@ -215,9 +332,128 @@ struct MentorRegistrationView: View {
       .jpegData(compressionQuality: 0.85)
   }
 
+  // MARK: Edit mode
+
+  private static func trimmed(_ value: Any?) -> String? {
+    guard let s = (value as? String)?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+    return s
+  }
+
+  /// Fills the form from the profile, then loads what college/counsellor/ leaves out.
+  private func setUpEditMode() async {
+    guard var editing, !loadedEdit else { return }
+    loadedEdit = true
+    // The latest profile, not the one As a Mentor loaded earlier: it may have
+    // changed since (e.g. on another device), and loadRestOfProfile re-sends
+    // the languages, so stale ones would be written back.
+    loadingRest = true
+    if let json = try? await app.api.get("college/counsellor/"), json.string("message") == "COUNSELLOR_PROFILE",
+      let fresh = json.object("data")
+    {
+      editing = fresh
+    }
+    name = editing.string("name") ?? ""
+    photoURL = editing["image"] as? String
+    institute = Self.trimmed(editing["institute_name"])
+    stateName = Self.trimmed(editing["state"])
+    speciality = Self.trimmed(editing["speciality"])
+    designation = Self.trimmed(editing["designation"])
+    languages = MentorLanguages.values(editing["know_language"] as? String)
+    saved.state = stateName
+    saved.speciality = speciality
+    saved.designation = designation
+    saved.languages = languages
+    async let rest: Void = loadRestOfProfile()
+    async let pending: Void = loadPendingInstituteRequest()
+    _ = await (rest, pending)
+  }
+
+  /// college/counsellor/ doesn't return degree, expertise or fee, but the
+  /// profile PUT answers with the full card: re-sending the current languages
+  /// changes nothing and gets those three. If this fails they stay blank, and
+  /// Save leaves whatever the mentor didn't fill in untouched.
+  private func loadRestOfProfile() async {
+    loadingRest = true
+    defer { loadingRest = false }
+    guard
+      let card = try? await app.api.request(
+        "PUT", "college/counsellor/profile/", body: ["know_language": MentorLanguages.raw(saved.languages)]
+      ).object("data")
+    else { return }
+    saved.degree = Self.trimmed(card["degree"])
+    if degree == nil { degree = saved.degree }
+    let cardExperts = card.objects("expert").compactMap { e in e.string("name").map { Expert(id: e.int("id") ?? 0, name: $0) } }
+    saved.expertIDs = expertIDs(cardExperts)
+    if experts.isEmpty { experts = cardExperts }
+    if let amount = card.object("appointment")?.string("consultation_fee"), !amount.isEmpty {
+      saved.fee = amount
+      if fee.isEmpty { fee = plainAmount(amount) }
+    }
+  }
+
+  /// A request still waiting for the admin stays visible when the form is reopened.
+  private func loadPendingInstituteRequest() async {
+    guard let json = try? await app.api.get("college/counsellor/institute-change-request/") else { return }
+    let pending = (json["data"] as? [JSONObject] ?? []).first { $0.string("status") == "PENDING" }
+    pendingInstitute = pending.flatMap { Self.trimmed($0["requested_institute_name"]) }
+  }
+
+  private func saveChanges() {
+    focus = nil
+    var fields: [String: String] = [:]
+    func addIfChanged(_ key: String, _ value: String?, _ old: String?) {
+      if let value, value != old { fields[key] = value }
+    }
+    addIfChanged("state", stateName, saved.state)
+    addIfChanged("speciality", speciality, saved.speciality)
+    addIfChanged("designation", designation, saved.designation)
+    addIfChanged("degree", degree, saved.degree)
+    addIfChanged("expert", experts.isEmpty ? nil : expertIDs(experts), saved.expertIDs)
+    // "" clears them.
+    if languages != saved.languages { fields["know_language"] = MentorLanguages.raw(languages) }
+
+    let amount = fee.trimmingCharacters(in: .whitespaces)
+    if amount.isEmpty {
+      // Blank is only fine when the current fee couldn't be loaded: nothing to change then.
+      if saved.fee != nil { return app.show("Please enter per minute amount") }
+    } else if !sameAmount(amount, saved.fee) {
+      guard let value = Double(amount) else { return app.show("Enter a valid per minute amount") }
+      if value < Double(minPerMinute) { return app.show("Per minute amount should be at least ₹\(minPerMinute)") }
+      fields["per_min"] = amount
+    }
+
+    let file = photo.map { APIClient.UploadFile(field: "image", data: $0, fileName: "mentor_profile.jpg", mimeType: "image/jpeg") }
+    if fields.isEmpty && file == nil { return app.show("No changes to save") }
+
+    submitting = true
+    Task {
+      defer { submitting = false }
+      do {
+        let result = try await app.api.postMultipart("college/counsellor/profile/", method: "PUT", fields: fields, file: file)
+        if (200..<300).contains(result.status) {
+          app.show("Profile updated")
+          dismiss()  // As a Mentor reloads the profile when this closes.
+        } else if result.status == 409 {
+          app.show("You can't change your fee during a call. Try again after it ends.")
+        } else {
+          app.show(Self.errorMessage(result.json))
+        }
+      } catch {
+        app.show("Network error. Please try again.")
+      }
+    }
+  }
+
+  /// The server's message, or a generic one; `message` can be an object of field errors.
+  static func errorMessage(_ json: JSONObject?) -> String {
+    if let message = json?["message"] as? String, !message.isEmpty { return message }
+    if let description = json?["description"] as? String, !description.isEmpty { return description }
+    return "Something went wrong"
+  }
+
   // MARK: Validation
 
-  private func revalidate() { if triedSubmit { validate() } }
+  private func revalidate() { if triedSubmit && !editMode { validate() } }
 
   /// Fills `errors` for every missing or invalid field.
   private func validate() {
@@ -242,6 +478,7 @@ struct MentorRegistrationView: View {
   }
 
   private func submit() {
+    if editMode { return saveChanges() }
     focus = nil
     triedSubmit = true
     validate()
@@ -257,14 +494,17 @@ struct MentorRegistrationView: View {
       var message: String
       var ok = false
       do {
+        var fields = [
+          "name": name.trimmingCharacters(in: .whitespaces), "state": stateName!, "institute_name": institute!,
+          "speciality": speciality!, "designation": designation!, "degree": degree!,
+          "expert": expertIDs(experts), "per_min": fee.trimmingCharacters(in: .whitespaces),
+          "exam_type": "NEET_PG",
+        ]
+        // Optional: left out entirely when none are picked, as on Android.
+        if !languages.isEmpty { fields["know_language"] = MentorLanguages.raw(languages) }
         let result = try await app.api.postMultipart(
           "college/counsellor/",
-          fields: [
-            "name": name.trimmingCharacters(in: .whitespaces), "state": stateName!, "institute_name": institute!,
-            "speciality": speciality!, "designation": designation!, "degree": degree!,
-            "expert": "[\(experts.map { String($0.id) }.joined(separator: ","))]", "per_min": fee.trimmingCharacters(in: .whitespaces),
-            "exam_type": "NEET_PG",
-          ],
+          fields: fields,
           file: APIClient.UploadFile(field: "image", data: photo!, fileName: "mentor_profile.jpg", mimeType: "image/jpeg"))
         ok = (200..<300).contains(result.status)
         message = result.json?.string(["description", "message"]) ?? (ok ? "Registration submitted" : "Something went wrong")
@@ -279,7 +519,7 @@ struct MentorRegistrationView: View {
   /// Back with a half-filled form asks before throwing it away.
   private func back() {
     guard !submitting else { return }
-    guard hasInput else { return dismiss() }
+    guard !editMode, hasInput else { return dismiss() }
     Task {
       if await NativeAlert.show(
         title: "Discard application?", message: "The details you have entered will be lost.", negative: "Keep editing",
@@ -298,18 +538,30 @@ struct MentorRegistrationView: View {
         Image(systemName: "arrow.left").font(.system(size: 20, weight: .medium)).foregroundStyle(.white).padding(8)
       }
       .accessibilityLabel("Back")
-      Text("Become a Mentor").font(.inter(18, .bold)).foregroundStyle(.white)
+      Text(editMode ? "Edit Profile" : "Become a Mentor").font(.inter(18, .bold)).foregroundStyle(.white)
       Spacer()
-      NavigationLink {
-        ContactUsView()
+      Button {
+        showingHelp = true
       } label: {
-        Image(systemName: "questionmark.circle").font(.system(size: 20)).foregroundStyle(.white).padding(12)
+        Image(systemName: "headphones").font(.system(size: 20)).foregroundStyle(.white).padding(12)
       }
       .accessibilityLabel("Help")
     }
     .padding(.leading, 8).padding(.trailing, 4)
     .frame(height: 56)
     .background(AppColors.primary)
+  }
+
+  private var loadingOverlay: some View {
+    ZStack {
+      Color.black.opacity(0.25).ignoresSafeArea()
+      HStack(spacing: 14) {
+        ProgressView().tint(AppColors.primary)
+        Text("Loading...").font(.inter(15, .medium)).foregroundStyle(ink)
+      }
+      .padding(.horizontal, 24).padding(.vertical, 18)
+      .background(.white, in: RoundedRectangle(cornerRadius: 12))
+    }
   }
 
   private var introCard: some View {
@@ -350,6 +602,7 @@ struct MentorRegistrationView: View {
 
   private var photoCard: some View {
     let error = errors[.photo]
+    let hasPhoto = photo != nil || !(photoURL ?? "").isEmpty
     return HStack(spacing: 16) {
       Button {
         focus = nil
@@ -359,6 +612,8 @@ struct MentorRegistrationView: View {
           Group {
             if let photo, let image = UIImage(data: photo) {
               Image(uiImage: image).resizable().scaledToFill()
+            } else if let photoURL, !photoURL.isEmpty {
+              NetImage(photoURL, placeholder: "home_iv_user_profile")
             } else {
               Image(systemName: "person.fill").font(.system(size: 40)).foregroundStyle(Color(hex: 0xB7C0C7))
             }
@@ -368,19 +623,19 @@ struct MentorRegistrationView: View {
           .clipShape(Circle())
           .overlay(Circle().stroke(error != nil ? errorColor : .white, lineWidth: 3))
           .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-          Image(systemName: photo == nil ? "camera" : "pencil").font(.system(size: 12)).foregroundStyle(.white)
+          Image(systemName: hasPhoto ? "camera.fill" : "camera").font(.system(size: 12)).foregroundStyle(.white)
             .frame(width: 28, height: 28).background(AppColors.primary, in: Circle())
             .overlay(Circle().stroke(.white, lineWidth: 2))
             .offset(x: 2, y: 2)
         }
       }
       .buttonStyle(.plain)
-      .accessibilityLabel(photo == nil ? "Add profile photo" : "Change profile photo")
+      .accessibilityLabel(hasPhoto ? "Change profile photo" : "Add profile photo")
       VStack(alignment: .leading, spacing: 4) {
         Text("Profile photo").font(.inter(15, .semibold)).foregroundStyle(ink)
         Text(error ?? "A clear photo helps students recognise and trust you.").font(.inter(12.5))
           .foregroundStyle(error != nil ? errorColor : muted).lineSpacing(3)
-        Button(photo == nil ? "Upload photo" : "Change photo") {
+        Button(hasPhoto ? "Change photo" : "Upload photo") {
           focus = nil
           choosingPhotoSource = true
         }
@@ -390,6 +645,18 @@ struct MentorRegistrationView: View {
     }
     .padding(16)
     .background(cardBackground(error: error != nil))
+    // On the card, not the whole form: an iPad shows this as a popover pointing
+    // at its view, and one anchored to the full-screen form never appears.
+    .confirmationDialog("Profile photo", isPresented: $choosingPhotoSource, titleVisibility: .visible) {
+      Button("Choose from gallery") { photoSource = .photoLibrary }
+      Button("Take a photo") {
+        if UIImagePickerController.isSourceTypeAvailable(.camera) { photoSource = .camera } else {
+          app.show("Camera not available")
+        }
+      }
+    } message: {
+      Text("Use a clear, recent photo of your face.")
+    }
   }
 
   private func section<Content: View>(_ title: String, _ subtitle: String, @ViewBuilder _ content: () -> Content)
@@ -437,7 +704,7 @@ struct MentorRegistrationView: View {
         if let prefix { Text(prefix).font(.inter(15, .semibold)).foregroundStyle(ink) }
         TextField("", text: text, prompt: Text(placeholder).foregroundColor(hint))
           .font(.inter(15, .medium)).foregroundStyle(ink)
-          .keyboardType(numeric ? .numberPad : .default)
+          .keyboardType(numeric ? (editMode ? .decimalPad : .numberPad) : .default)
           .textInputAutocapitalization(numeric ? .never : .words)
           .textContentType(numeric ? nil : .name)
           .focused($focus, equals: field)
@@ -452,9 +719,26 @@ struct MentorRegistrationView: View {
     }
   }
 
+  /// A read-only value with a lock (bg_mentor_reg_field_locked).
+  private func lockedInput(_ label: String, _ value: String) -> some View {
+    frame(label, error: nil) {
+      HStack(spacing: 8) {
+        Text(value).font(.inter(15, .medium)).foregroundStyle(muted).multilineTextAlignment(.leading)
+        Spacer(minLength: 8)
+        Image(systemName: "lock.fill").font(.system(size: 14)).foregroundStyle(hint)
+      }
+      .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+      .frame(minHeight: 52)
+      .background(lockedFill, in: RoundedRectangle(cornerRadius: 12))
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(fieldBorder))
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("\(label), \(value), locked")
+    }
+  }
+
   private func selectInput(
-    _ field: Field?, _ label: String, _ placeholder: String, _ value: String?, sheet: Bool = false, disabled: Bool = false,
-    locked: Bool = false, action: @escaping () -> Void
+    _ field: Field?, _ label: String, _ placeholder: String, _ value: String?, disabled: Bool = false,
+    action: @escaping () -> Void
   ) -> some View {
     let error = field.flatMap { errors[$0] }
     return frame(label, error: error) {
@@ -464,88 +748,77 @@ struct MentorRegistrationView: View {
       } label: {
         HStack(spacing: 8) {
           Text(value ?? placeholder).font(.inter(15, value != nil ? .medium : .regular))
-            .foregroundStyle(value != nil ? (locked ? muted : ink) : hint)
+            .foregroundStyle(value != nil ? ink : hint).multilineTextAlignment(.leading)
           Spacer()
-          Image(systemName: locked ? "lock" : sheet ? "chevron.down" : "chevron.right")
-            .font(.system(size: locked ? 14 : 15, weight: .medium)).foregroundStyle(disabled || locked ? hint : muted)
+          Image(systemName: "chevron.right").font(.system(size: 15, weight: .medium)).foregroundStyle(disabled ? hint : muted)
         }
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 10))
         .frame(minHeight: 52)
-        .background(disabled || locked ? Color(hex: 0xF2F4F5) : fieldFill, in: RoundedRectangle(cornerRadius: 12))
+        .background(disabled ? lockedFill : fieldFill, in: RoundedRectangle(cornerRadius: 12))
         .overlay(boxBorder(error: error != nil, focused: false))
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .disabled(locked)
       .accessibilityLabel("\(label), \(value ?? placeholder)")
       .id(field)
     }
   }
 
-  /// Selected expertise as removable chips, plus an add/edit chip.
-  private var expertsInput: some View {
-    let error = errors[.experts]
-    return frame("Expertise", error: error) {
-      FlowStack(spacing: 8, lineSpacing: 8) {
-        ForEach(experts) { e in
-          HStack(spacing: 4) {
-            Text(e.name).font(.inter(13, .semibold)).foregroundStyle(AppColors.primary)
-            Button {
-              experts.removeAll { $0.id == e.id }
-              revalidate()
-            } label: {
-              Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(AppColors.primary).padding(3)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Remove \(e.name)")
-          }
-          .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 6))
-          .background(Color(hex: 0xE6F2ED), in: Capsule())
-        }
-        Button {
-          focus = nil
-          pickingExperts = true
-        } label: {
-          HStack(spacing: 4) {
-            Image(systemName: experts.isEmpty ? "plus" : "pencil").font(.system(size: 13, weight: .semibold))
-            Text(experts.isEmpty ? "Add expertise" : "Edit").font(.inter(13, .semibold))
-          }
-          .foregroundStyle(AppColors.primary)
-          .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 12))
-          .background(.white, in: Capsule())
-          .overlay(Capsule().stroke(AppColors.primary))
-        }
-        .buttonStyle(.plain)
-      }
-      .padding(10)
+  /// tvInstitutePending: the request waiting for the admin.
+  private func pendingNotice(_ requested: String) -> some View {
+    Text("Change requested: \(requested)\nWaiting for admin approval. Your current institute stays until then.")
+      .font(.inter(12.5, .medium)).foregroundStyle(Color(hex: 0x8A5A00)).lineSpacing(2)
+      .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(fieldFill, in: RoundedRectangle(cornerRadius: 12))
-      .overlay(boxBorder(error: error != nil, focused: false))
-      .id(Field.experts)
-    }
+      .background(Color(hex: 0xFFF7E6), in: RoundedRectangle(cornerRadius: 12))
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(hex: 0xF5D48A)))
+      .padding(.bottom, 12)
   }
 
-  /// The sticky bottom bar: Submit and the terms note.
+  private var requestInstituteButton: some View {
+    Button {
+      focus = nil
+      if pendingInstitute != nil {
+        app.show("You already have a pending institute change request.")
+      } else {
+        requestingInstitute = true
+      }
+    } label: {
+      Text("Request institute change").font(.inter(14, .semibold)).foregroundStyle(AppColors.primary)
+        .frame(maxWidth: .infinity).frame(height: 48)
+        .background(.white, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.primary))
+    }
+    .buttonStyle(.plain)
+    .padding(.bottom, 14)
+  }
+
+  /// The sticky bottom bar: Submit (or Save changes) and, when registering, the terms note.
   private var submitBar: some View {
     VStack(spacing: 8) {
       Button(action: submit) {
         HStack(spacing: 12) {
           if submitting { ProgressView().tint(.white) }
-          Text(submitting ? "Submitting…" : "Submit application").font(.inter(16, .bold))
+          Text(
+            editMode ? (submitting ? "Saving..." : "Save changes") : (submitting ? "Submitting…" : "Submit application")
+          )
+          .font(.inter(16, .bold))
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity).frame(height: 52)
         .background(submitting ? Color(hex: 0x5E8A82) : AppColors.primary, in: RoundedRectangle(cornerRadius: 12))
       }
       .buttonStyle(.plain)
-      .disabled(submitting)
-      NavigationLink {
-        LegalDocumentView(doc: .terms)
-      } label: {
-        (Text("By submitting, you agree to our ") + Text("Terms & Conditions").foregroundColor(AppColors.primary).fontWeight(.semibold))
-          .font(.inter(12)).foregroundStyle(muted).multilineTextAlignment(.center)
+      .disabled(submitting || loadingRest)
+      if !editMode {
+        Button {
+          showingTerms = true
+        } label: {
+          (Text("By submitting, you agree to our ") + Text("Terms & Conditions").foregroundColor(AppColors.primary).fontWeight(.semibold))
+            .font(.inter(12)).foregroundStyle(muted).multilineTextAlignment(.center)
+        }
+        .buttonStyle(.plain)
       }
-      .buttonStyle(.plain)
     }
     .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
     .background(.white)
@@ -555,6 +828,120 @@ struct MentorRegistrationView: View {
 
 extension Notification.Name {
   fileprivate static let mentorFormScroll = Notification.Name("MentorFormScroll")
+}
+
+/// bottomsheet_request_institute: asks the admin to approve a new institute.
+private struct InstituteRequestSheet: View {
+  let current: String
+  let onSent: (String) -> Void
+  let onAlreadyPending: () -> Void
+
+  @EnvironmentObject private var app: AppState
+  @Environment(\.dismiss) private var dismiss
+  @State private var requested = ""
+  @State private var reason = ""
+  @State private var error: String?
+  @State private var sending = false
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 0) {
+        HStack(alignment: .top) {
+          Text("Change institute").font(.inter(20, .bold)).foregroundStyle(AppColors.primary)
+          Spacer()
+          Button {
+            dismiss()
+          } label: {
+            Image(systemName: "xmark").font(.system(size: 18, weight: .semibold)).foregroundStyle(ink).padding(4)
+          }
+          .accessibilityLabel("Close")
+        }
+        Text("Our admin team reviews this request. Your current institute stays on your profile until it's approved.")
+          .font(.inter(13)).foregroundStyle(muted).lineSpacing(2).padding(.top, 6)
+
+        label("Current institute").padding(.top, 20)
+        Text(current).font(.inter(15, .medium)).foregroundStyle(labelColor)
+          .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+          .background(lockedFill, in: RoundedRectangle(cornerRadius: 12))
+          .overlay(RoundedRectangle(cornerRadius: 12).stroke(fieldBorder))
+
+        label("New institute name").padding(.top, 18)
+        TextField("", text: $requested, prompt: Text("Enter institute name").foregroundColor(hint))
+          .font(.inter(15, .medium)).foregroundStyle(ink).textInputAutocapitalization(.words)
+          .padding(.horizontal, 14).frame(height: 52)
+          .background(fieldFill, in: RoundedRectangle(cornerRadius: 12))
+          .overlay(RoundedRectangle(cornerRadius: 12).stroke(error != nil ? errorColor : fieldBorder))
+          .onChangeCompat(of: requested) { _, _ in error = nil }
+        if let error {
+          Text(error).font(.inter(12)).foregroundStyle(errorColor).padding(.top, 6).padding(.leading, 2)
+        }
+
+        label("Reason (optional)").padding(.top, 18)
+        MultilineTextField($reason, prompt: Text("Why are you changing your institute?").foregroundColor(hint), lines: 2...4)
+          .font(.inter(15, .medium)).foregroundStyle(ink)
+          .padding(14).frame(minHeight: 66, alignment: .topLeading)
+          .background(fieldFill, in: RoundedRectangle(cornerRadius: 12))
+          .overlay(RoundedRectangle(cornerRadius: 12).stroke(fieldBorder))
+
+        Button(action: send) {
+          HStack(spacing: 12) {
+            if sending { ProgressView().tint(.white) }
+            Text(sending ? "Sending..." : "Send request").font(.inter(16, .bold))
+          }
+          .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 52)
+          .background(AppColors.primary, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .disabled(sending)
+        .padding(.top, 22)
+      }
+      .padding(EdgeInsets(top: 28, leading: 20, bottom: 20, trailing: 20))
+    }
+    .background(.white)
+  }
+
+  private func label(_ text: String) -> some View {
+    Text(text).font(.inter(13, .semibold)).foregroundStyle(labelColor).padding(.bottom, 6)
+  }
+
+  private func send() {
+    let name = requested.trimmingCharacters(in: .whitespaces)
+    if name.isEmpty { return error = "Please enter the institute name" }
+    if name.caseInsensitiveCompare(current) == .orderedSame { return error = "This is already your institute" }
+    sending = true
+    Task {
+      defer { sending = false }
+      do {
+        _ = try await app.api.request(
+          "POST", "college/counsellor/institute-change-request/",
+          body: [
+            "requested_institute_name": name, "current_institute_name": current,
+            "reason": reason.trimmingCharacters(in: .whitespaces),
+          ])
+        // The sheet closes only once the request is sent, so a failure doesn't lose what was typed.
+        onSent(name)
+        app.show("Request sent to admin")
+        dismiss()
+      } catch let failure as APIError {
+        switch failure.statusCode {
+        case 409:
+          // A request is already waiting for the admin (e.g. sent from another device).
+          app.show("You already have a pending institute change request.")
+          onAlreadyPending()
+          dismiss()
+        case 404:
+          // Server without this feature yet.
+          app.show("Institute change requests aren't available yet. Please contact support.")
+        case nil:
+          app.show("Network error. Please try again.")
+        default:
+          app.show(MentorRegistrationView.errorMessage(failure.payload))
+        }
+      } catch {
+        app.show("Network error. Please try again.")
+      }
+    }
+  }
 }
 
 /// The system photo picker / camera with the square crop editor.
@@ -593,7 +980,8 @@ private struct SquarePhotoPicker: UIViewControllerRepresentable {
 
 // MARK: - Pickers
 
-/// Shared picker chrome: green header with a rounded search box, then a list.
+/// Shared picker chrome, as CounsellorPickActivity: green header, then a
+/// green-outlined search box on white, then the list.
 private struct PickerScaffold<Body: View, Bottom: View>: View {
   let title: String
   @Binding var query: String
@@ -603,31 +991,32 @@ private struct PickerScaffold<Body: View, Bottom: View>: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      VStack(spacing: 0) {
-        HStack(spacing: 8) {
-          Button {
-            dismiss()
-          } label: {
-            Image(systemName: "arrow.left").font(.system(size: 20, weight: .medium)).foregroundStyle(.white).padding(8)
-          }
-          .accessibilityLabel("Back")
-          Text(title).font(.inter(18, .bold)).foregroundStyle(.white).lineLimit(1)
-          Spacer()
+      HStack(spacing: 8) {
+        Button {
+          dismiss()
+        } label: {
+          Image(systemName: "arrow.left").font(.system(size: 20, weight: .medium)).foregroundStyle(.white).padding(8)
         }
-        .padding(.leading, 8)
-        .frame(height: 56)
-        HStack(spacing: 8) {
-          Image(systemName: "magnifyingglass").foregroundStyle(muted)
+        .accessibilityLabel("Back")
+        Text(title).font(.inter(18, .bold)).foregroundStyle(.white).lineLimit(1)
+        Spacer()
+      }
+      .padding(.leading, 8)
+      .frame(height: 56)
+      .background(AppColors.primary)
+      VStack(spacing: 0) {
+        HStack(spacing: 10) {
+          Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(muted)
           TextField("", text: $query, prompt: Text("Search").foregroundColor(hint)).font(.inter(15)).foregroundStyle(ink)
         }
         .padding(.horizontal, 14)
         .frame(height: 46)
         .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.primary, lineWidth: 1))
+        .padding(EdgeInsets(top: 12, leading: 16, bottom: 6, trailing: 16))
+        content.frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      .background(AppColors.primary)
-      content.frame(maxWidth: .infinity, maxHeight: .infinity).background(.white)
+      .background(.white)
       bottom
     }
     .background(AppColors.primary.ignoresSafeArea(edges: .top))
@@ -636,29 +1025,33 @@ private struct PickerScaffold<Body: View, Bottom: View>: View {
   }
 }
 
-private func pickRow(_ name: String, _ checked: Bool, multi: Bool = false, action: @escaping () -> Void) -> some View {
+/// A picker row (row_counsellor_pick): the name, and a green verified tick when chosen.
+private func pickRow(_ name: String, _ checked: Bool, action: @escaping () -> Void) -> some View {
   Button(action: action) {
     HStack(spacing: 12) {
-      Text(name).font(.inter(15, checked ? .semibold : .medium)).foregroundStyle(checked ? AppColors.primary : ink)
-        .multilineTextAlignment(.leading).padding(.vertical, 14)
+      Text(name).font(.inter(15)).foregroundStyle(ink).multilineTextAlignment(.leading).padding(.vertical, 14)
       Spacer()
-      if multi {
-        Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-          .opacity(checked ? 1 : 0)
-          .frame(width: 22, height: 22)
-          .background(checked ? AppColors.primary : .white, in: RoundedRectangle(cornerRadius: 6))
-          .overlay(RoundedRectangle(cornerRadius: 6).stroke(checked ? AppColors.primary : Color(hex: 0xC7CBD1), lineWidth: 1.5))
-      } else if checked {
-        Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(AppColors.primary)
-      }
+      Image(systemName: "checkmark.seal.fill").font(.system(size: 20)).foregroundStyle(AppColors.primary)
+        .opacity(checked ? 1 : 0)
     }
     .padding(.horizontal, 20)
-    .frame(minHeight: 54)
-    .overlay(alignment: .bottom) { Rectangle().fill(Color(hex: 0xF0F2F2)).frame(height: 1) }
+    .frame(minHeight: 50)
     .contentShape(Rectangle())
   }
   .buttonStyle(.plain)
   .accessibilityAddTraits(checked ? .isSelected : [])
+}
+
+/// The multi-select Done bar: "Done (3 selected)".
+private func doneBar(_ count: Int, action: @escaping () -> Void) -> some View {
+  Button(action: action) {
+    Text(count > 0 ? "Done (\(count) selected)" : "Done").font(.inter(16, .bold)).foregroundStyle(.white)
+      .frame(maxWidth: .infinity).frame(height: 52)
+      .background(AppColors.primary, in: RoundedRectangle(cornerRadius: 12))
+  }
+  .buttonStyle(.plain)
+  .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+  .background(.white)
 }
 
 private func pickerMessage(_ icon: String, _ text: String) -> some View {
@@ -670,11 +1063,12 @@ private func pickerMessage(_ icon: String, _ text: String) -> some View {
   .frame(maxWidth: .infinity, maxHeight: .infinity)
 }
 
-/// Single-select options (speciality, designation, state, institute).
+/// Single-select options (speciality, designation, state, institute), or a fixed list (degree).
 private struct OptionPickerView: View {
   let title: String
   let endpoint: String
   let query: [String: String]
+  var options: [String]? = nil
   let selected: String?
   let onPick: (String) -> Void
 
@@ -709,9 +1103,61 @@ private struct OptionPickerView: View {
       EmptyView()
     }
     .task {
+      if let options {
+        all = options.enumerated().map { Expert(id: $0.offset, name: $0.element) }
+        return
+      }
       let json = try? await app.api.get(endpoint, query: query)
-      all = json.map(items) ?? []
+      // The drop-downs come without ids (all would be 0 and the list would
+      // show only the first row): positions, as CounsellorPickActivity uses.
+      all = (json.map(items) ?? []).enumerated().map { Expert(id: $0.offset, name: $0.element.name) }
     }
+  }
+}
+
+/// Multi-select from the fixed language list. Unlike expertise an empty
+/// selection is allowed: it clears them.
+struct LanguagesPickerView: View {
+  /// Lowercase API values.
+  let selected: [String]
+  let onDone: ([String]) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var chosen: Set<String> = []
+  @State private var search = ""
+
+  /// The fixed list, plus any saved language that isn't in it so it isn't dropped.
+  private var names: [String] {
+    MentorLanguages.all + selected.map(MentorLanguages.capitalize).filter { !MentorLanguages.all.contains($0) }
+  }
+
+  var body: some View {
+    let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+    let shown = names.filter { q.isEmpty || $0.lowercased().contains(q) }
+    PickerScaffold(title: "Select languages", query: $search) {
+      if shown.isEmpty {
+        pickerMessage("magnifyingglass", "No matches for your search")
+      } else {
+        ScrollView {
+          LazyVStack(spacing: 0) {
+            ForEach(shown, id: \.self) { name in
+              let value = name.lowercased()
+              pickRow(name, chosen.contains(value)) {
+                if chosen.remove(value) == nil { chosen.insert(value) }
+              }
+            }
+          }
+          .padding(.bottom, 8)
+        }
+      }
+    } bottom: {
+      doneBar(chosen.count) {
+        // Keep the order they appear in the list.
+        onDone(names.map { $0.lowercased() }.filter(chosen.contains))
+        dismiss()
+      }
+    }
+    .onAppear { chosen = Set(selected) }
   }
 }
 
@@ -744,7 +1190,7 @@ private struct ExpertsPickerView: View {
         ScrollView {
           LazyVStack(spacing: 0) {
             ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
-              pickRow(item.name, chosen[item.id] != nil, multi: true) {
+              pickRow(item.name, chosen[item.id] != nil) {
                 if chosen.removeValue(forKey: item.id) == nil { chosen[item.id] = item }
               }
               .onAppear { if index >= shown.count - 5 { Task { await load() } } }
@@ -755,20 +1201,12 @@ private struct ExpertsPickerView: View {
         }
       }
     } bottom: {
-      Button {
+      doneBar(chosen.count) {
         guard !chosen.isEmpty else { return app.show("Please select at least one") }
         // Keep the order they appear in the list.
         onDone(all.filter { chosen[$0.id] != nil } + chosen.values.filter { e in !all.contains(e) })
         dismiss()
-      } label: {
-        Text(chosen.isEmpty ? "Done" : "Done · \(chosen.count) selected").font(.inter(16, .bold)).foregroundStyle(.white)
-          .frame(maxWidth: .infinity).frame(height: 52)
-          .background(AppColors.primary, in: RoundedRectangle(cornerRadius: 12))
       }
-      .buttonStyle(.plain)
-      .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-      .background(.white)
-      .overlay(alignment: .top) { Rectangle().fill(cardBorder).frame(height: 1) }
     }
     .task {
       chosen = Dictionary(selected.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
